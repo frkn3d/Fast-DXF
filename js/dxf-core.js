@@ -892,6 +892,7 @@ function DXFCore() {
       this.poly = null; this.pins = null;
       this.version = ''; this.codepage = ''; this.handseed = null; this.handseedHex = ''; this.units = 0;
       this.entStart = -1; this.entEnd = -1; this.modelHandle = ''; this.firstOwner = '';
+      this.curTable = ''; this.layerTableHandle = ''; this.layerEnd = -1;
       this.eof = false;
       this.xs = []; this.ys = []; this.bs = [];
     }
@@ -938,6 +939,7 @@ function DXFCore() {
         this.sec = S_NONE; return;
       }
       if (v === 'EOF') { this.flushPending(off); this.eof = true; this.tk.stop = true; return; }
+      if (v === 'ENDTAB' && this.sec === S_TABLES && this.curTable === 'LAYER' && this.layerEnd < 0) this.layerEnd = off;
       if (this.sec === S_ENT || this.sec === S_BLOCKS || this.sec === S_TABLES) {
         if (this.sec === S_ENT && this.entStart < 0) this.entStart = off;
         this.E.reset(v, off); this.inObj = true;
@@ -947,7 +949,8 @@ function DXFCore() {
       if (!this.inObj) return;
       const E = this.E;
       if (this.sec === S_TABLES) {
-        if (E.type === 'LAYER') this.B.addLayer(E.name, E.color === 256 ? 7 : E.color, E.get(70, 0) | 0, E.tcolor);
+        if (E.type === 'TABLE') { this.curTable = E.name.trim().toUpperCase(); if (this.curTable === 'LAYER') this.layerTableHandle = E.handle; }
+        else if (E.type === 'LAYER') this.B.addLayer(E.name, E.color === 256 ? 7 : E.color, E.get(70, 0) | 0, E.tcolor);
         else if (E.type === 'BLOCK_RECORD' && E.name.toUpperCase() === '*MODEL_SPACE') this.modelHandle = E.handle;
         return;
       }
@@ -1378,6 +1381,7 @@ function DXFCore() {
       binary, eol, version: P.version, codepage: P.codepage, encoding: codepageLabel(P.codepage, P.version), units: P.units,
       handseed: P.handseed, handseedHex: P.handseedHex, modelHandle: P.modelHandle || P.firstOwner,
       entStart: P.entStart < 0 ? size : P.entStart, entEnd: P.entEnd < 0 ? size : P.entEnd,
+      layerEnd: P.layerEnd, layerTableHandle: P.layerTableHandle,
       origin: [B.ox, B.oy], ext, stats: B.stats, unsupported: B.unsupported, warnings: B.warnings,
       entCount: B.entCount, textCount: B.textCount, instCount: B.instCount, ms: Date.now() - t0, eof: P.eof
     });
@@ -1793,6 +1797,8 @@ function DXFCore() {
       return Object.assign(def, { type, xs, ys, zs, deg: g(71, 3) | 0, closed: (g(70, 0) & 1) !== 0 });
     }
     if (type === 'TEXT') return Object.assign(def, { type, x: fx * g(10, 0), y: g(20, 0), z: fx * g(30, 0), h: g(40, 1), rot: g(50, 0), str: gs(1) || '' });
+    if (type === 'INSERT') return Object.assign(def, { type, x: fx * g(10, 0), y: g(20, 0), z: fx * g(30, 0), unsupported: true });
+    if (type === 'MTEXT') return Object.assign(def, { type, x: g(10, 0), y: g(20, 0), z: g(30, 0), unsupported: true });
     return Object.assign(def, { type, unsupported: true });
   }
 
@@ -1834,8 +1840,20 @@ function DXFCore() {
     for (const d of msg.news) { const txt = genEntity(d.def, ctx); appended.push(d.ed ? patchEntity(txt, d.ed, eol) : txt); }
     const appendText = appended.join('');
 
+    // yeni katmanlar: LAYER tablosunun sonuna (ENDTAB'tan önce)
+    let layerText = '';
+    if (msg.newLayers && msg.newLayers.length && msg.layerEnd >= 0) {
+      for (const L of msg.newLayers) {
+        const P = [], p = (c, v) => P.push(codeStr(c), String(v));
+        p(0, 'LAYER');
+        if (modern) { p(5, alloc()); if (msg.layerTableHandle) p(330, msg.layerTableHandle); p(100, 'AcDbSymbolTableRecord'); p(100, 'AcDbLayerTableRecord'); }
+        p(2, L.name); p(70, 0); p(62, L.aci || 7); p(6, 'Continuous');
+        layerText += P.join(eol) + eol;
+      }
+    }
     const events = [];
     if (modern && allocated && msg.handseed) events.push({ fs: msg.handseed[0], fe: msg.handseed[1], text: hnext.toString(16).toUpperCase() });
+    if (layerText) events.push({ fs: msg.layerEnd, fe: msg.layerEnd, text: layerText });
     const parts = [];
     let cur = 0;
     const raw = (a, b) => {

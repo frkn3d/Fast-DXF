@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DXF Okuyucu</title>
+<title>Fast DXF</title>
 <style>
   :root {
     --bg: #111317; --panel: #191c21; --panel2: #20242b; --panel3: #282d35; --line: #2c313a; --line2: #383e49;
@@ -31,9 +31,18 @@
 
   /* ── Açılır menüler (tek davranış: tık aç/kapat, menüler arası gezinme, Esc, dışarı tık) */
   .dd { position: relative; }
-  .dd-menu { display: none; position: absolute; top: calc(100% + 4px); left: 0; z-index: 60; min-width: 250px; background: var(--panel2); border: 1px solid var(--line2); border-radius: 10px; padding: 5px; box-shadow: 0 12px 32px rgba(0,0,0,.5); }
-  .dd.open > .dd-menu { display: block; }
-  .dd.right > .dd-menu { left: auto; right: 0; }
+  .dd-menu { display: none; position: fixed; left: 0; top: 0; z-index: 300; min-width: 250px; background: var(--panel2); border: 1px solid var(--line2); border-radius: 10px; padding: 5px; box-shadow: 0 12px 32px rgba(0,0,0,.5); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+  .dd.open > .dd-menu { display: block; animation: ddIn .09s ease-out; }
+  @keyframes ddIn { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+  .dd.up.open > .dd-menu { animation: none; }
+  .mi .ck { width: 14px; height: 14px; border: 1.5px solid var(--muted); border-radius: 3px; flex: none; display: grid; place-items: center; font-size: 10px; line-height: 1; }
+  .mi.on .ck { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .mi[data-sm].on:not(:hover):not(.kb) { background: transparent; color: var(--text); }
+  .mi.on .ck::after { content: '✓'; }
+  .mi .mk { width: 18px; text-align: center; font-family: Consolas, monospace; color: #3fe07a; flex: none; }
+  .mi:hover .mk { color: #fff; }
+  .msub { padding: 6px 10px; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+  .msub input[type=range] { flex: 1; accent-color: var(--accent); }
   .mi { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 7px 10px; border: 0; background: transparent; border-radius: 7px; cursor: pointer; }
   .mi:hover:not(:disabled), .mi.kb { background: var(--accent2); color: #fff; }
   .mi.on { background: var(--accentBg); color: #fff; }
@@ -47,7 +56,7 @@
   .mhead { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .6px; padding: 6px 10px 3px; }
 
   /* ── Şerit */
-  #ribbon { display: flex; align-items: stretch; gap: 0; padding: 6px 6px 0; background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; overflow-y: visible; scrollbar-width: thin; }
+  #ribbon { display: flex; flex-wrap: wrap; align-items: stretch; gap: 4px 0; padding: 6px 6px 0; background: var(--panel); border-bottom: 1px solid var(--line); overflow: visible; }
   .grp { display: flex; flex-direction: column; padding: 0 8px; border-right: 1px solid var(--line); min-width: max-content; }
   .grp:last-child { border-right: 0; }
   .grp .body { display: flex; align-items: flex-start; gap: 2px; flex: 1; }
@@ -185,6 +194,22 @@
   .aci i:hover { outline: 2px solid #fff; }
   pre.raw { background: var(--bg); padding: 10px; border-radius: 7px; max-height: 60vh; overflow: auto; font: 12px/1.35 Consolas, monospace; white-space: pre; }
   .help td { padding: 3px 10px 3px 0; vertical-align: top; }
+  .set { display: grid; grid-template-columns: 170px 1fr; gap: 4px 18px; width: min(640px, 86vw); }
+  .set h4 { grid-column: 1 / -1; margin: 14px 0 2px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+  .set h4:first-child { margin-top: 0; }
+  .set .lb { color: var(--text); padding-top: 6px; }
+  .set .lb small { display: block; color: var(--muted); font-size: 11px; }
+  .set .ctl { display: flex; align-items: center; gap: 8px; min-height: 30px; }
+  .set .ctl select, .set .ctl input[type=number] { height: 28px; border-radius: 7px; border: 1px solid var(--line2); background: var(--bg); padding: 0 8px; min-width: 120px; }
+  .set .ctl input[type=range] { flex: 1; accent-color: var(--accent); }
+  .sw2 { position: relative; width: 36px; height: 20px; border-radius: 10px; background: var(--line2); border: 0; cursor: pointer; flex: none; transition: background .15s; }
+  .sw2::after { content: ''; position: absolute; left: 3px; top: 3px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: left .15s; }
+  .sw2.on { background: var(--accent2); } .sw2.on::after { left: 19px; }
+  #snapDD .snapbtn { display: inline-flex; align-items: center; gap: 4px; }
+  #snapDD .dd-btn { cursor: pointer; padding: 1px 6px; border-radius: 5px; border: 1px solid var(--line2); background: transparent; font-size: 12px; color: var(--muted); }
+  #snapDD .dd-btn:hover { border-color: var(--accent); color: var(--text); }
+  .layhead { display: flex; align-items: center; justify-content: space-between; }
+  .layhead .mini { height: 22px; padding: 0 8px; text-transform: none; letter-spacing: 0; font-weight: 400; }
   .help kbd { background: var(--panel2); border: 1px solid var(--line2); border-radius: 4px; padding: 0 5px; font: 11px Consolas, monospace; white-space: nowrap; }
   .help h4 { margin: 12px 0 4px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
   .fres { width: min(560px, 80vw); max-height: 46vh; overflow: auto; border: 1px solid var(--line2); border-radius: 7px; }
@@ -248,16 +273,20 @@
     <symbol id="i-terrain" viewBox="0 0 24 24"><path d="M2 19l6-9 4 5 3-4 7 8z"/><path d="M8 10l2 3"/></symbol>
     <symbol id="i-theme" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><path d="M12 1v3M12 20v3M1 12h3M20 12h3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></symbol>
     <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 015 .5c0 1.5-2.5 2-2.5 3.5M12 17h.01"/></symbol>
+    <symbol id="i-new" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M12 11v6M9 14h6"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
     <symbol id="i-gizmo" viewBox="0 0 24 24"><path d="M12 12V3M12 12l8 5M12 12l-8 5"/><path d="M12 3l-2 3h4zM20 17l-3.5.3 1.8-3.2zM4 17l1.7-3.2 1.8 3.2z"/></symbol>
   </defs>
 </svg>
 
 <div id="app">
   <header id="topbar">
-    <span class="brand"><span class="logo"><svg viewBox="0 0 24 24"><path d="M4 18L12 4l8 14z"/></svg></span>DXF Okuyucu</span>
+    <span class="brand"><span class="logo"><svg viewBox="0 0 24 24"><path d="M4 18L12 4l8 14z"/></svg></span>Fast DXF</span>
     <div class="dd" id="ddFile">
       <button class="tbtn dd-btn">Dosya ▾</button>
       <div class="dd-menu">
+        <button class="mi" data-cmd="new"><svg class="i"><use href="#i-new"/></svg><span class="lbl">Yeni çizim<span class="hint">Boş bir çizimle başlayın (metre)</span></span><span class="sc">Ctrl+N</span></button>
         <button class="mi" data-cmd="open"><svg class="i"><use href="#i-open"/></svg><span class="lbl">Aç…</span><span class="sc">Ctrl+O</span></button>
         <div class="msep"></div>
         <button class="mi" data-cmd="save" data-need="done"><svg class="i"><use href="#i-save"/></svg><span class="lbl">DXF olarak kaydet<span class="hint">Orijinal korunur; değişmeyen kısımlar birebir kopyalanır</span></span><span class="sc">Ctrl+S</span></button>
@@ -269,6 +298,8 @@
         <button class="mi" data-cmd="pdf" data-need="done"><svg class="i"><use href="#i-export"/></svg><span class="lbl">PDF (vektörel, A4–A0)</span></button>
         <button class="mi" data-cmd="png" data-need="done"><svg class="i"><use href="#i-export"/></svg><span class="lbl">PNG (ekran görüntüsü, 3B dahil)</span></button>
         <button class="mi" data-cmd="surfdxf" data-need="surf"><svg class="i"><use href="#i-terrain"/></svg><span class="lbl">Arazi yüzeyini DXF'e aktar<span class="hint">3DFACE üçgenleri</span></span></button>
+        <div class="msep"></div>
+        <button class="mi" data-cmd="settings"><svg class="i"><use href="#i-gear"/></svg><span class="lbl">Ayarlar…</span><span class="sc">Ctrl+,</span></button>
       </div>
     </div>
     <button class="tbtn icon" id="bUndo" data-cmd="undo" title="Geri al (Ctrl+Z)"><svg class="i"><use href="#i-undo"/></svg></button>
@@ -277,6 +308,7 @@
     <button class="tbtn" id="bFind" data-cmd="find" data-need="done" title="Metin bul (Ctrl+F)"><svg class="i"><use href="#i-find"/></svg>Bul</button>
     <button class="tbtn" id="bGoto" data-cmd="goto" data-need="info" title="Koordinata git (GIT)"><svg class="i"><use href="#i-goto"/></svg>Git</button>
     <button class="tbtn icon" id="bTheme" data-cmd="theme" title="Açık / koyu arka plan"><svg class="i"><use href="#i-theme"/></svg></button>
+    <button class="tbtn icon" id="bSettings" data-cmd="settings" title="Ayarlar (Ctrl+,)"><svg class="i"><use href="#i-gear"/></svg></button>
     <button class="tbtn icon" id="bHelp" data-cmd="help" title="Komutlar ve kısayollar (F1)"><svg class="i"><use href="#i-help"/></svg></button>
   </header>
 
@@ -399,7 +431,7 @@
 
   <main>
     <aside id="left">
-      <h3>Katmanlar <span id="layCount" style="text-transform:none;letter-spacing:0"></span></h3>
+      <h3 class="layhead"><span>Katmanlar <span id="layCount" style="text-transform:none;letter-spacing:0"></span></span><button class="mini" id="layNew" title="Yeni katman oluştur"><svg class="i" style="width:12px;height:12px;vertical-align:-1px"><use href="#i-plus"/></svg> Yeni</button></h3>
       <div class="row"><input type="search" id="laySearch" placeholder="Katman ara…"></div>
       <div class="row">
         <button class="mini" id="layAll" title="Tüm katmanları göster">Hepsi açık</button>
@@ -437,7 +469,8 @@
   <footer id="status">
     <div id="coords">X: — Y: —</div>
     <div id="cmd"><span id="prompt">Hazır</span><input id="cmdin" autocomplete="off" spellcheck="false" placeholder="Komut yazın (L, PL, TR, EX, O…) ya da değer (10,5 · @10,0 · 25)"><div id="sugg"></div></div>
-    <div id="info"><span id="infoText"></span><span class="tog on" id="tSnap" title="Nesne yakalama açık/kapalı (F3)">YAKALA</span><span class="tog on sm2" data-snap="end" title="Uç nokta">uç</span><span class="tog on sm2" data-snap="mid" title="Orta nokta">orta</span><span class="tog sm2" data-snap="near" title="En yakın nokta">yakın</span><span class="tog" id="tOrtho" title="Yatay/dikey kilit (F8)">ORTO</span></div>
+    <div id="info"><span id="infoText"></span><span class="dd up" id="snapDD"><span class="snapbtn"><span class="tog on" id="tSnap" title="Nesne yakalama açık/kapalı (F3)">YAKALA</span><button class="dd-btn" title="Yakalama modları">▴</button></span>
+      <div class="dd-menu" id="snapMenu" style="min-width:260px"></div></span><span class="tog" id="tOrtho" title="Yatay/dikey kilit (F8)">ORTO</span></div>
   </footer>
 </div>
 
@@ -446,6 +479,7 @@
 <input type="file" id="fileIn" accept=".dxf,.DXF" style="display:none">
 
 <script src="js/dxf-core.js"></script>
+<script src="js/template.js"></script>
 <script src="js/workers.js"></script>
 <script src="js/store.js"></script>
 <script src="js/render.js"></script>

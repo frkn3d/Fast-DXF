@@ -428,53 +428,133 @@ class Store {
     return out;
   }
 
-  // Yakalama. modes: {end, mid, near}. Dönüş: {p:[x,y,z], kind:'end'|'mid'|'near'} ya da null
-  snap(x, y, tol, modes) {
+  // ── Nesne yakalama (AutoCAD OSNAP). modes: {end, mid, cen, quad, int, perp, near, node, ins}; base: perp için önceki nokta
+  // Dönüş: {p:[x,y,z], kind} ya da null. Öncelik: uç/düğüm/ekleme > kesişim > orta/merkez/çeyrek > dik > yakın
+  snap(x, y, tol, modes, base) {
     modes = modes || { end: true };
-    let best = null, bd = tol, bk = 9;
-    const E = this.E, b = E.bb.a, fl = E.flags.a;
-    // öncelik: uç(0) > orta(1) > yakın(2); daha öncelikli tür biraz daha uzakta olsa bile tercih edilir
-    const test = (px, py, pz, k) => {
-      const d = Math.hypot(px - x, py - y);
+    const E = this.E, b = E.bb.a, fl = E.flags.a, TN = this.core.TYPE_NAMES;
+    const PRI = { end: 0, node: 0, ins: 0, int: 1, mid: 2, cen: 2, quad: 2, perp: 3, near: 4 };
+    let best = null, bp = 9, bd = Infinity, cur = -1;
+    const offer = (px, py, pz, kind, dist, id2) => {
+      if (!modes[kind]) return;
+      const d = dist !== undefined ? dist : Math.hypot(px - x, py - y);
       if (d > tol) return;
-      if (k < bk ? d < tol : (k === bk && d < bd)) { bd = d; bk = k; best = { p: [px, py, pz], kind: k === 0 ? 'end' : k === 1 ? 'mid' : 'near' }; }
+      const pr = PRI[kind];
+      if (pr < bp || (pr === bp && d < bd)) { bp = pr; bd = d; best = { p: [px, py, pz], kind, id: cur, id2 }; }
     };
-    const segTests = (x1, y1, z1, x2, y2, z2) => {
-      if (modes.end) { test(x1, y1, z1, 0); test(x2, y2, z2, 0); }
-      if (modes.mid) test((x1 + x2) / 2, (y1 + y2) / 2, (z1 + z2) / 2, 1);
-      if (modes.near && bk > 1) {
-        const dx = x2 - x1, dy = y2 - y1, l2 = dx * dx + dy * dy;
-        let t = l2 > 0 ? ((x - x1) * dx + (y - y1) * dy) / l2 : 0; t = t < 0 ? 0 : t > 1 ? 1 : t;
-        test(x1 + t * dx, y1 + t * dy, z1 + t * (z2 - z1), 2);
+    const segs = [];   // kesişim ve dik için düz parçalar
+    const near = (x1, y1, z1, x2, y2, z2) => {
+      const dx = x2 - x1, dy = y2 - y1, l2 = dx * dx + dy * dy;
+      let t = l2 > 0 ? ((x - x1) * dx + (y - y1) * dy) / l2 : 0; t = t < 0 ? 0 : t > 1 ? 1 : t;
+      return [x1 + t * dx, y1 + t * dy, z1 + t * (z2 - z1)];
+    };
+    const seg = (x1, y1, z1, x2, y2, z2, straight) => {
+      if (modes.near) { const q = near(x1, y1, z1, x2, y2, z2); offer(q[0], q[1], q[2], 'near'); }
+      if (straight && (modes.int || modes.perp)) {
+        const sx0 = Math.min(x1, x2), sx1 = Math.max(x1, x2), sy0 = Math.min(y1, y2), sy1 = Math.max(y1, y2);
+        if (sx1 >= x - tol && sx0 <= x + tol && sy1 >= y - tol && sy0 <= y + tol && segs.length < 4000) segs.push([x1, y1, z1, x2, y2, z2, cur]);
       }
+      if (straight && modes.mid) offer((x1 + x2) / 2, (y1 + y2) / 2, (z1 + z2) / 2, 'mid');
     };
-    let budget = 4000;
+    // bir köşe dizisindeki eğri (yay parçası) iç köşeleri: eşit uzunluklu ve küçük dönüşlü
+    const arcInner = (P, Z, s, e, v) => {
+      if (v <= s || v >= e) return false;
+      const ax = P[2 * v] - P[2 * v - 2], ay = P[2 * v + 1] - P[2 * v - 1], bx = P[2 * v + 2] - P[2 * v], by = P[2 * v + 3] - P[2 * v + 1];
+      const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by); if (!la || !lb) return false;
+      const turn = Math.abs(Math.atan2(ax * by - ay * bx, ax * bx + ay * by));
+      return turn < 0.13 && turn > 1e-6 && Math.abs(la - lb) < 0.02 * Math.max(la, lb);
+    };
+    const circum = (ax, ay, bx, by, cx, cy) => {
+      const d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by)); if (Math.abs(d) < 1e-18) return null;
+      const a2 = ax * ax + ay * ay, b2 = bx * bx + by * by, c2 = cx * cx + cy * cy;
+      const ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d, uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d;
+      return [ux, uy, Math.hypot(ax - ux, ay - uy)];
+    };
+    let budget = 3000;
+    const big = tol * 1.0001;
     this.grid.query(x - tol, y - tol, x + tol, y + tol, (id) => {
       if (budget <= 0 || (fl[id] & F_DEL) || !this.layerVis[E.layer.a[id]]) return;
-      if (x < b[4 * id] - tol || x > b[4 * id + 2] + tol || y < b[4 * id + 1] - tol || y > b[4 * id + 3] + tol) return;
-      budget--;
+      // merkez yakalama için daire kutusunun içinde de olabilir: kutu + tol
+      if (x < b[4 * id] - big || x > b[4 * id + 2] + big || y < b[4 * id + 1] - big || y > b[4 * id + 3] + big) return;
+      budget--; cur = id;
+      const type = TN[E.type.a[id]];
       const ch = this.chunks[E.chunk.a[id]], vs = E.vs.a[id], vc = E.vc.a[id];
       if (ch && vc) {
-        if (fl[id] & F_POINTS) { const P = ch.ppos, Z = ch.pz; for (let v = vs; v < vs + vc; v++) test(P[2 * v], P[2 * v + 1], Z[v], 0); }
+        if (fl[id] & F_POINTS) { const P = ch.ppos, Z = ch.pz; for (let v = vs; v < vs + vc; v++) offer(P[2 * v], P[2 * v + 1], Z[v], 'node'); }
         else {
-          const P = ch.pos, Z = ch.z;
-          for (let v = vs; v < vs + vc; v += 2) segTests(P[2 * v], P[2 * v + 1], Z[v], P[2 * v + 2], P[2 * v + 3], Z[v + 1]);
+          const P = ch.pos, Z = ch.z, e = vs + vc - 1;
+          const curve = type === 'CIRCLE' || type === 'ARC' || type === 'ELLIPSE' || type === 'SPLINE';
+          // eğrilerde: uçlar (kapalı değilse), merkez, çeyrekler; ekrandaki parçaların köşeleri yakalanmaz
+          if (curve) {
+            const closed = Math.hypot(P[2 * e] - P[2 * vs], P[2 * e + 1] - P[2 * vs + 1]) < 1e-9;
+            if (!closed) { offer(P[2 * vs], P[2 * vs + 1], Z[vs], 'end'); offer(P[2 * e], P[2 * e + 1], Z[e], 'end'); }
+            let dmin = Infinity;
+            for (let v = vs; v < vs + vc; v += 2) { const q = near(P[2 * v], P[2 * v + 1], Z[v], P[2 * v + 2], P[2 * v + 3], Z[v + 1]); dmin = Math.min(dmin, Math.hypot(q[0] - x, q[1] - y)); seg(P[2 * v], P[2 * v + 1], Z[v], P[2 * v + 2], P[2 * v + 3], Z[v + 1], false); }
+            if (type === 'CIRCLE' || type === 'ARC') {
+              const m = vs + 2 * Math.floor(vc / 4), c = circum(P[2 * vs], P[2 * vs + 1], P[2 * m], P[2 * m + 1], P[2 * e], P[2 * e + 1]) || (vc > 6 ? circum(P[2 * vs], P[2 * vs + 1], P[2 * (vs + 2)], P[2 * (vs + 2) + 1], P[2 * m], P[2 * m + 1]) : null);
+              if (c) {
+                const z = Z[vs];
+                // imleç çemberin üzerindeyse ya da merkezin yakınındaysa merkezi öner
+                if (dmin <= tol) offer(c[0], c[1], z, 'cen', Math.min(tol, dmin + tol * 0.6)); else offer(c[0], c[1], z, 'cen');
+                if (modes.quad) for (let k = 0; k < 4; k++) {
+                  const a = k * Math.PI / 2, qx = c[0] + c[2] * Math.cos(a), qy = c[1] + c[2] * Math.sin(a);
+                  // yay üzerinde mi: en yakın tessel parçaya uzaklık
+                  let on = Infinity; for (let v = vs; v < vs + vc; v += 2) { const q = near(P[2 * v], P[2 * v + 1], 0, P[2 * v + 2], P[2 * v + 3], 0); on = Math.min(on, Math.hypot(q[0] - qx, q[1] - qy)); }
+                  if (on < c[2] * 0.01 + 1e-9) offer(qx, qy, z, 'quad');
+                }
+                if (type === 'ARC') { const mv = vs + 2 * Math.floor(vc / 4); offer(P[2 * mv], P[2 * mv + 1], Z[mv], 'mid'); }
+              }
+            } else if (type === 'ELLIPSE') {
+              let cx = 0, cy = 0; for (let v = vs; v < vs + vc; v += 2) { cx += P[2 * v]; cy += P[2 * v + 1]; }
+              const n = vc / 2; if (dmin <= tol) offer(cx / n, cy / n, Z[vs], 'cen', Math.min(tol, dmin + tol * 0.6));
+            }
+          } else {
+            // çizgi / polyline / yüz kenarları
+            for (let v = vs; v < vs + vc; v += 2) {
+              const x1 = P[2 * v], y1 = P[2 * v + 1], x2 = P[2 * v + 2], y2 = P[2 * v + 3];
+              const a1 = arcInner(P, Z, vs, e, v), a2 = arcInner(P, Z, vs, e, v + 1);
+              if (!a1) offer(x1, y1, Z[v], 'end');
+              if (!a2) offer(x2, y2, Z[v + 1], 'end');
+              seg(x1, y1, Z[v], x2, y2, Z[v + 1], !(a1 || a2));   // yay parçaları düz kabul edilmez
+            }
+          }
         }
       }
       const is = E.is.a[id], ic = E.ic.a[id];
       for (let k = is; k < is + ic; k++) {
         const B = this.blocks[this.IN.blk.a[k]]; if (!B) continue;
-        const s = this.IN.slot.a[k], f = B.f.a, o = s * 8, sz = B.fz.a[2 * s], tz = B.fz.a[2 * s + 1];
-        if (modes.end) test(f[o + 2], f[o + 5], tz, 0);
+        const s = this.IN.slot.a[k], f = B.f.a, o = s * 8, sz = this.flatBlocks ? 0 : B.fz.a[2 * s], tz = B.fz.a[2 * s + 1];
+        offer(f[o + 2], f[o + 5], tz, 'ins');
         if (B.pos && B.nV < 20000) {
           const P = B.pos, Z = B.z;
           const X = (v) => f[o] * P[2 * v] + f[o + 1] * P[2 * v + 1] + f[o + 2], Y = (v) => f[o + 3] * P[2 * v] + f[o + 4] * P[2 * v + 1] + f[o + 5];
-          const fz = this.flatBlocks ? 0 : sz;
-          for (let v = 0; v < B.nV; v += 2) segTests(X(v), Y(v), fz * Z[v] + tz, X(v + 1), Y(v + 1), fz * Z[v + 1] + tz);
+          for (let v = 0; v < B.nV; v += 2) { const z1 = sz * Z[v] + tz, z2 = sz * Z[v + 1] + tz; offer(X(v), Y(v), z1, 'end'); offer(X(v + 1), Y(v + 1), z2, 'end'); seg(X(v), Y(v), z1, X(v + 1), Y(v + 1), z2, true); }
         }
       }
-      if (modes.end) { const ts = E.ts.a[id], tc = E.tc.a[id]; for (let t = ts; t < ts + tc; t++) test(this.TX.x.a[t], this.TX.y.a[t], this.TX.z.a[t], 0); }
+      const ts = E.ts.a[id], tc = E.tc.a[id];
+      for (let t = ts; t < ts + tc; t++) offer(this.TX.x.a[t], this.TX.y.a[t], this.TX.z.a[t], 'ins');
     });
+    // kesişimler (imlece yakın düz parçalar arasında)
+    if (modes.int && segs.length > 1) {
+      const n = Math.min(segs.length, 400);
+      for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+        const A = segs[i], B2 = segs[j];
+        const rx = A[3] - A[0], ry = A[4] - A[1], sx = B2[3] - B2[0], sy = B2[4] - B2[1], den = rx * sy - ry * sx;
+        if (Math.abs(den) < 1e-18) continue;
+        const qx = B2[0] - A[0], qy = B2[1] - A[1], t = (qx * sy - qy * sx) / den, u = (qx * ry - qy * rx) / den;
+        if (t < -1e-9 || t > 1 + 1e-9 || u < -1e-9 || u > 1 + 1e-9) continue;
+        if ((t < 1e-9 || t > 1 - 1e-9) && (u < 1e-9 || u > 1 - 1e-9)) continue; // ortak uç: uç nokta yakalaması
+        cur = A[6]; offer(A[0] + rx * t, A[1] + ry * t, A[2] + (A[5] - A[2]) * t, 'int', undefined, B2[6]);
+      }
+    }
+    // dik: önceki noktadan parçaya inen dikmenin ayağı
+    if (modes.perp && base) {
+      for (const A of segs) {
+        const dx = A[3] - A[0], dy = A[4] - A[1], l2 = dx * dx + dy * dy; if (!l2) continue;
+        const t = ((base[0] - A[0]) * dx + (base[1] - A[1]) * dy) / l2; if (t < 0 || t > 1) continue;
+        cur = A[6]; offer(A[0] + t * dx, A[1] + t * dy, A[2] + t * (A[5] - A[2]), 'perp');
+      }
+    }
     return best;
   }
   // Varlığın toplam uzunluğu (çizgi parçaları, plan düzleminde)

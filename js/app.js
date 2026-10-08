@@ -75,7 +75,21 @@ const COMMANDS = [
   [['save', 'kaydet', 'qsave'], 'c', 'save', 'DXF kaydet', 'Dosya'],
   [['open', 'aç'], 'c', 'open', 'Aç', 'Dosya']
 ];
+COMMANDS.push([['new', 'yeni'], 'c', 'new', 'Yeni çizim', 'Dosya'], [['op', 'options', 'ayarlar'], 'c', 'settings', 'Ayarlar', 'Araçlar'],
+  [['la', 'layer', 'katman'], 'c', 'newlayer', 'Yeni katman', 'Araçlar'], [['os', 'osnap', 'yakala'], 'c', 'osnap', 'Nesne yakalama modları', 'Araçlar']);
 const ALIAS = new Map(); for (const c of COMMANDS) for (const a of c[0]) ALIAS.set(a, c);
+// Nesne yakalama modları: [anahtar, ad, işaret]
+const SNAP_MODES = [['end', 'Uç nokta', '□'], ['mid', 'Orta nokta', '△'], ['cen', 'Merkez', '○'], ['quad', 'Çeyrek noktası', '◇'], ['int', 'Kesişim', '✕'],
+  ['perp', 'Dik', '⊥'], ['near', 'En yakın', '⧗'], ['node', 'Düğüm (nokta nesnesi)', '⊗'], ['ins', 'Ekleme noktası (blok, yazı)', '⊡']];
+const SNAP_NAME = Object.fromEntries(SNAP_MODES.map(m => [m[0], m[1]]));
+const DEFAULT_SNAP = { end: true, mid: true, cen: true, quad: false, int: true, perp: true, near: false, node: true, ins: true };
+const DEFAULT_SETTINGS = { theme: 'dark', grid: true, aperture: 12, snapLabels: true, snap: DEFAULT_SNAP, gizmo: true, dynInput: true, wheelInvert: false, zoomSpeed: 1, textLimit: 25000, newUnits: 6, style: 'wire' };
+function loadSettings() {
+  let o = {}; try { o = JSON.parse(localStorage.getItem('fastdxf.settings') || '{}') || {}; } catch (e) { o = {}; }
+  const st = Object.assign({}, DEFAULT_SETTINGS, o); st.snap = Object.assign({}, DEFAULT_SNAP, o.snap || {});
+  return st;
+}
+function saveSettings(st) { try { localStorage.setItem('fastdxf.settings', JSON.stringify(st)); } catch (e) { /* özel pencerede saklanamayabilir */ } }
 
 class App {
   constructor() {
@@ -85,7 +99,9 @@ class App {
     catch (e) { document.body.innerHTML = '<div style="padding:40px;font:16px sans-serif;color:#ddd">' + esc(e.message) + '</div>'; throw e; }
     this.editor = new Editor(this);
     this.gizmo = new Gizmo(this);
-    this.snapOn = true; this.snapModes = { end: true, mid: true, near: false };
+    this.settings = loadSettings();
+    this.defCache = new Map(); this.defPending = new Set();   // yakalamada tam geometri
+    this.snapOn = true; this.snapModes = Object.assign({}, this.settings.snap);
     this.ortho = false; this.curLayer = 0;
     this.mouse = { sx: 0, sy: 0, wx: 0, wy: 0 };
     this.snapPt = null; this.userMoved = false; this.worker = null;
@@ -93,8 +109,9 @@ class App {
     this.offsetDist = 1; this.filletR = 0; this.chamferD = 1; this.polySides = 6;
     this.R.preview = (ctx) => this.drawPreview(ctx);
     this.R.onDraw = () => this.afterDraw();
-    this.R.setTheme(true);
+    this.R.setTheme(this.settings.theme !== 'light');
     this.vc = new ViewCube(this, $('view'));
+    this.applySettings();
     this.initTools();
     this.bind();
     this.setTool('select');
@@ -106,7 +123,7 @@ class App {
   modal(html, onShow) {
     $('dlg').innerHTML = html; $('modal').classList.add('show');
     if (onShow) onShow($('dlg'));
-    const f = $('dlg').querySelector('input,select,button.pri'); if (f) setTimeout(() => { if (f.isConnected) f.focus(); }, 30);
+    const f = $('dlg').querySelector('input,select,button.pri'); if (f) setTimeout(() => { if (f.isConnected) { f.focus(); if (f.select && f.type === 'text') f.select(); } }, 30);
   }
   closeModal() { $('modal').classList.remove('show'); $('dlg').innerHTML = ''; }
   alert(msg) {
@@ -139,7 +156,8 @@ class App {
   unit() { const i = this.store.info; return i ? (UNIT_SFX[i.units] || '') : ''; }
   updateDoc() {
     const S = this.store;
-    $('docName').innerHTML = S.file ? '<b>' + esc(S.file.name) + '</b>' + (S.dirty ? ' <span class="dirty">● kaydedilmemiş değişiklik</span>' : '') : 'Dosya açılmadı';
+    $('docName').innerHTML = S.file ? '<b>' + esc(S.file.name) + '</b>' + (S.isNew ? ' <span style="color:var(--muted)">· yeni, henüz kaydedilmedi</span>' : '') + (S.dirty ? ' <span class="dirty">● kaydedilmemiş değişiklik</span>' : '') : 'Dosya açılmadı';
+    document.title = (S.file ? S.file.name + ' — ' : '') + 'Fast DXF';
   }
 
   // ───────────── dosya açma
@@ -152,9 +170,17 @@ class App {
     }
     $('fileIn').click();
   }
-  async load(file, handle) {
+  async newDrawing() {
+    if (this.store.dirty && !await this.confirm('Kaydedilmemiş değişiklikler var. Yine de yeni çizime başlansın mı?')) return;
+    const u = this.settings.newUnits | 0;
+    const txt = NEW_DXF_TEMPLATE.replace('$INSUNITS\n 70\n6\n', '$INSUNITS\n 70\n' + u + '\n');
+    this.load(new File([txt], 'Yeni çizim.dxf', { type: 'application/dxf' }), null, { isNew: true, force: true });
+  }
+  async load(file, handle, opts) {
     if (!file) return;
-    if (this.store.dirty && !await this.confirm('Kaydedilmemiş değişiklikler var. Yine de yeni dosya açılsın mı?')) return;
+    opts = opts || {};
+    if (!opts.force && this.store.dirty && !await this.confirm('Kaydedilmemiş değişiklikler var. Yine de yeni dosya açılsın mı?')) return;
+    this.loadOpts = opts;
     if (this.worker) { this.worker.terminate(); this.worker = null; }
     this.R.freeAll(); this.store.clear(); this.editor.reset(); this.setTool('select'); this.gizmo.invalidate();
     const R = this.R; R.az = -90; R.el = 90; R.persp = false; R.cz = 0; R.zcolor = false; this.setBlockFlat(false);
@@ -162,7 +188,7 @@ class App {
     this.loading = true; this.userMoved = false; this.firstFit = false; this.t0 = performance.now();
     $('drop').classList.add('hide');
     $('prog').style.display = 'block'; $('progText').textContent = file.name + ' okunuyor…'; $('progBar').style.width = '0%';
-    document.title = file.name + ' — DXF Okuyucu';
+    document.title = file.name + ' — Fast DXF';
     this.renderLayers(); this.renderProps(); this.updateButtons(); this.update3DUI(); this.updateDoc();
     const w = this.worker = spawnWorker(parseWorkerMain);
     w.onmessage = (ev) => this.onMsg(ev.data);
@@ -193,6 +219,7 @@ class App {
         this.loading = false;
         this.worker.terminate(); this.worker = null;
         S.onDone(d);
+        S.isNew = !!(this.loadOpts && this.loadOpts.isNew);
         $('prog').style.display = 'none';
         this.curLayer = S.layerVis[0] ? 0 : Math.max(0, S.layers.findIndex((L, i) => S.layerVis[i]));
         this.R.zcr = S.zview.slice();
@@ -202,6 +229,7 @@ class App {
         const bad = S.suspiciousBlocks();
         if (bad.blocks) this.setBlockFlat(true);
         const faces = S.nTri ? ' · ' + fmtN(Math.round(S.nTri)) + ' yüzey üçgeni (Gölgeli stilde görünür)' : '';
+        if (S.isNew) { this.toast('Yeni çizim hazır (' + (UNITS[d.units] || 'birimsiz') + '). Çizmeye başlayın: L, PL, C… · Katman eklemek için sol paneldeki "Yeni".', 6000); this.setTool('select'); this.updateDoc(); break; }
         this.toast(S.file.name + ' açıldı: ' + fmtN(S.nEnt) + ' nesne, ' + sec + ' sn' + (S.has3D ? ' · 3B veri var (Shift + orta tuş ile yörünge)' : '') + faces +
           (bad.blocks ? ' · ' + bad.blocks + ' sembol bloğunun iç kotu hatalı görünüyor (' + fmtN(bad.refs) + ' referans); 3B görünümde ekleme kotunda düz çiziliyor.' : ''), bad.blocks ? 9000 : 5000);
         if (!d.eof && !d.binary) this.toast('Uyarı: dosya EOF ile bitmiyor (yarım kalmış olabilir). Okunabilen kısım gösteriliyor.', 6000);
@@ -372,7 +400,7 @@ class App {
 
   // ───────────── seçim / düzenleme yardımcıları
   selChanged() { this.gizmo.invalidate(); this.R.hl.dirty = true; this.R.request(); this.renderProps(); this.updateButtons(); }
-  onEdited() { this.gizmo.invalidate(); this.renderLayers(); this.renderProps(); this.updateButtons(); this.updateDoc(); }
+  onEdited() { this.defCache.clear(); this.gizmo.invalidate(); this.renderLayers(); this.renderProps(); this.updateButtons(); this.updateDoc(); }
   ready() { if (!this.store.done) { this.toast('Dosya henüz okunuyor, lütfen bekleyin.'); return false; } return true; }
   deleteSel() { if (!this.ready()) return; const ids = this.store.selList.slice(); if (!ids.length) { this.toast('Silinecek nesne seçili değil.'); return; } this.editor.remove(ids); this.selChanged(); }
   zoomSel() {
@@ -608,11 +636,12 @@ class App {
 
   // ───────────── koordinat dönüşümleri / yakalama
   abs(x, y) { const o = this.store.info ? this.store.info.origin : [0, 0]; return [x + o[0], y + o[1]]; }
+  absP(p) { return p && p.abs ? p.abs.slice() : this.abs(p[0], p[1]); }
   rel(x, y) { const o = this.store.info ? this.store.info.origin : [0, 0]; return [x - o[0], y - o[1]]; }
   // İmlecin dünya noktası (yakalama + orto uygulanmış); yakalanan noktada Z de döner
   point(base) {
     let p = [this.mouse.wx, this.mouse.wy];
-    if (this.snapPt) p = this.snapPt.p.slice();
+    if (this.snapPt) { p = this.snapPt.p.slice(); if (this.snapPt.abs) p.abs = this.snapPt.abs; }
     else if (this.ortho && base) { if (Math.abs(p[0] - base[0]) > Math.abs(p[1] - base[1])) p[1] = base[1]; else p[0] = base[0]; }
     return p;
   }
@@ -620,8 +649,69 @@ class App {
     this.snapPt = null;
     const t = this.tool;
     if (!this.snapOn || !t || !t.wantsPoints || !this.store.grid || !this.R.is2D) return;
-    this.snapPt = this.store.snap(this.mouse.wx, this.mouse.wy, 10 / this.R.scale, this.snapModes);
+    this.snapPt = this.store.snap(this.mouse.wx, this.mouse.wy, (this.settings.aperture || 12) / this.R.scale, this.snapModes, this.toolBase());
+    if (this.snapPt) this.refineSnap(this.snapPt);
   }
+  // Ekrandaki (float32, parçalı) geometriden bulunan yakalama noktasını nesnenin DXF'teki tam tanımından yeniden hesapla.
+  // Tanım ilk seferde arka planda okunur; geldiğinde nokta güncellenir (tıklamadan önce hazır olur).
+  fetchDef(id) {
+    if (id < 0 || this.defCache.has(id) || this.defPending.has(id)) return;
+    this.defPending.add(id);
+    this.getDef(id).then(d => { this.defCache.set(id, d || null); }).catch(() => this.defCache.set(id, null)).then(() => {
+      this.defPending.delete(id);
+      const sp = this.snapPt;
+      if (sp && !sp.exact && (sp.id === id || sp.id2 === id)) { this.refineSnap(sp); this.showCoords(); this.R.request(); }
+    });
+  }
+  refineSnap(sp) {
+    if (sp.exact || sp.id === undefined || sp.id < 0) return;
+    const d = this.defCache.get(sp.id);
+    if (d === undefined) { this.fetchDef(sp.id); return; }
+    if (!d) return;
+    let d2 = null;
+    if (sp.kind === 'int' && sp.id2 !== undefined && sp.id2 !== sp.id) { d2 = this.defCache.get(sp.id2); if (d2 === undefined) { this.fetchDef(sp.id2); return; } if (!d2) return; }
+    const o = this.store.info.origin, ax = sp.p[0] + o[0], ay = sp.p[1] + o[1];
+    const G = Geom.prims(d), cands = [];
+    const zOf = (dd) => dd.type === 'LINE' ? null : (dd.elev !== undefined ? dd.elev : dd.cz !== undefined ? dd.cz : dd.z !== undefined ? dd.z : null);
+    const add = (x, y, z) => cands.push([x, y, z]);
+    switch (sp.kind) {
+      case 'end':
+        if (d.type === 'LINE') { add(d.x1, d.y1, d.z1); add(d.x2, d.y2, d.z2); }
+        else if (G) for (const q of G.P) { const a = Geom.at(q, 0), b = Geom.at(q, 1); add(a[0], a[1], zOf(d)); add(b[0], b[1], zOf(d)); }
+        else if (d.xs && d.zs) for (let i = 0; i < d.xs.length; i++) add(d.xs[i], d.ys[i], d.zs[i]);
+        break;
+      case 'mid':
+        if (d.type === 'LINE') add((d.x1 + d.x2) / 2, (d.y1 + d.y2) / 2, ((d.z1 || 0) + (d.z2 || 0)) / 2);
+        else if (G) for (const q of G.P) { const m = Geom.at(q, 0.5); add(m[0], m[1], zOf(d)); }
+        break;
+      case 'cen': if (d.cx !== undefined) add(d.cx, d.cy, d.cz || 0); break;
+      case 'quad': if (d.r) for (let k = 0; k < 4; k++) add(d.cx + d.r * Math.cos(k * Math.PI / 2), d.cy + d.r * Math.sin(k * Math.PI / 2), d.cz || 0); break;
+      case 'node': case 'ins': if (d.x !== undefined) add(d.x, d.y, d.z || 0); break;
+      case 'int': {
+        const H = d2 ? Geom.prims(d2) : G; if (!G || !H) break;
+        for (const p of G.P) for (const q of H.P) { if (p === q) continue; for (const X of Geom.hitPrim(p, q)) add(X[0], X[1], null); }
+        break;
+      }
+      case 'perp': case 'near': {
+        if (!G) break;
+        const b = this.toolBase(), B = b ? this.abs(b[0], b[1]) : null;
+        for (const q of G.P) {
+          if (sp.kind === 'perp' && B && q.k === 'L') { const dx = q.x2 - q.x1, dy = q.y2 - q.y1, t = ((B[0] - q.x1) * dx + (B[1] - q.y1) * dy) / (dx * dx + dy * dy); add(q.x1 + t * dx, q.y1 + t * dy, null); }
+          if (sp.kind === 'near') { const s0 = Geom.nearestS({ P: [q] }, ax, ay), m = Geom.at(q, s0.s); add(m[0], m[1], null); }
+        }
+        break;
+      }
+    }
+    let best = null, bd = Infinity;
+    for (const c of cands) { const dd = Math.hypot(c[0] - ax, c[1] - ay); if (dd < bd) { bd = dd; best = c; } }
+    const lim = 2 * (this.settings.aperture || 12) / this.R.scale;
+    if (!best || bd > lim) return;
+    const r = this.rel(best[0], best[1]);
+    sp.p = [r[0], r[1], best[2] !== null && best[2] !== undefined ? best[2] : sp.p[2]];
+    sp.abs = [best[0], best[1]]; sp.exact = true;
+  }
+  // aracın son girilen noktası (dik yakalama ve orto için)
+  toolBase() { const t = this.tool; if (!t) return null; return t.base || (t.pts && t.pts[t.pts.length - 1]) || t.c || t.a || (t.P && t.P[t.P.length - 1]) || null; }
   // "x,y[,z]" mutlak · "@dx,dy" göreli · "@uzunluk<açı" · tek sayı: imleç yönünde uzunluk
   parsePoint(s, base) {
     s = s.trim().replace(/\s+/g, '');
@@ -647,7 +737,7 @@ class App {
   // ───────────── araçlar
   initTools() {
     const app = this, S = this.store, R = this.R;
-    const A = (p) => app.abs(p[0], p[1]);                 // göreli → mutlak
+    const A = (p) => app.absP(p);                        // göreli → mutlak (yakalanan noktada tam koordinat)
     const Z = (p) => p[2] !== undefined ? p[2] : 0;
     const strokePts = (ctx, P, closed, color, dash) => {
       if (P.length < 2) return;
@@ -1157,9 +1247,7 @@ class App {
       const src = inf && inf.src !== undefined ? inf.src : id;
       text = new TextDecoder(S.info.encoding).decode(await S.file.slice(E.fs.a[src], E.fe.a[src]).arrayBuffer());
     }
-    const d = core.parseDef(core.patchEntity(text, toEd(S.edits.get(id) || {}), '\n'));
-    if (d && d.unsupported) return null;
-    return d;
+    return core.parseDef(core.patchEntity(text, toEd(S.edits.get(id) || {}), '\n'));
   }
   // Kutudaki görünür nesnelerin çizgi parçaları (mutlak) — kesici / sınır kenarlar
   edgeSegs(bb, exclude) {
@@ -1248,16 +1336,50 @@ class App {
     });
   }
 
-  drawPreview(ctx) {
-    if (this.tool && this.tool.preview) this.tool.preview(ctx);
-    if (this.snapPt) {
-      const [x, y] = this.R.w2s(this.snapPt.p[0], this.snapPt.p[1]), k = this.snapPt.kind;
-      ctx.strokeStyle = '#3fb950'; ctx.lineWidth = 2; ctx.beginPath();
-      if (k === 'end') ctx.rect(x - 5, y - 5, 10, 10);
-      else if (k === 'mid') { ctx.moveTo(x, y - 6); ctx.lineTo(x + 6, y + 5); ctx.lineTo(x - 6, y + 5); ctx.closePath(); }
-      else { ctx.moveTo(x - 5, y - 5); ctx.lineTo(x + 5, y - 5); ctx.lineTo(x - 5, y + 5); ctx.lineTo(x + 5, y + 5); ctx.closePath(); }
-      ctx.stroke(); ctx.lineWidth = 1;
+  // plan görünümde uyarlanır ızgara (ana çizgiler her 5 aralıkta)
+  drawGrid(ctx) {
+    const R = this.R; if (!this.settings.grid || !R.is2D || !this.store.info) return;
+    const o = this.store.info.origin, minPx = 18;
+    let step = Math.pow(10, Math.floor(Math.log10(minPx / R.scale)));
+    for (const k of [1, 2, 5, 10]) if (step * k * R.scale >= minPx) { step *= k; break; }
+    const [x0, y1] = R.s2w(0, 0), [x1, y0] = R.s2w(R.W, R.H);
+    const ax0 = Math.floor((x0 + o[0]) / step), ax1 = Math.ceil((x1 + o[0]) / step), ay0 = Math.floor((y0 + o[1]) / step), ay1 = Math.ceil((y1 + o[1]) / step);
+    if ((ax1 - ax0) + (ay1 - ay0) > 600) return;
+    const minor = R.dark ? 'rgba(255,255,255,0.045)' : 'rgba(0,0,0,0.05)', major = R.dark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.11)';
+    ctx.lineWidth = 1;
+    for (const pass of [0, 1]) {
+      ctx.strokeStyle = pass ? major : minor; ctx.beginPath();
+      for (let i = ax0; i <= ax1; i++) { if ((i % 5 === 0) !== !!pass) continue; const sx = Math.round(R.w2s(i * step - o[0], 0)[0]) + .5; ctx.moveTo(sx, 0); ctx.lineTo(sx, R.H); }
+      for (let j = ay0; j <= ay1; j++) { if ((j % 5 === 0) !== !!pass) continue; const sy = Math.round(R.w2s(0, j * step - o[1])[1]) + .5; ctx.moveTo(0, sy); ctx.lineTo(R.W, sy); }
+      ctx.stroke();
     }
+  }
+  drawSnapMarker(ctx, sp) {
+    const [x, y] = this.R.w2s(sp.p[0], sp.p[1]), k = sp.kind, r = 7;
+    ctx.save(); ctx.lineWidth = 2; ctx.strokeStyle = '#3fe07a'; ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 3;
+    ctx.beginPath();
+    if (k === 'end') ctx.rect(x - r, y - r, 2 * r, 2 * r);
+    else if (k === 'mid') { ctx.moveTo(x, y - r - 1); ctx.lineTo(x + r + 1, y + r - 1); ctx.lineTo(x - r - 1, y + r - 1); ctx.closePath(); }
+    else if (k === 'cen') ctx.arc(x, y, r, 0, 2 * Math.PI);
+    else if (k === 'quad') { ctx.moveTo(x, y - r - 1); ctx.lineTo(x + r + 1, y); ctx.lineTo(x, y + r + 1); ctx.lineTo(x - r - 1, y); ctx.closePath(); }
+    else if (k === 'int') { ctx.moveTo(x - r, y - r); ctx.lineTo(x + r, y + r); ctx.moveTo(x + r, y - r); ctx.lineTo(x - r, y + r); }
+    else if (k === 'perp') { ctx.moveTo(x - r, y + r); ctx.lineTo(x + r, y + r); ctx.moveTo(x - r, y + r); ctx.lineTo(x - r, y - r); ctx.moveTo(x - r, y); ctx.lineTo(x, y); ctx.lineTo(x, y + r); }
+    else if (k === 'near') { ctx.moveTo(x - r, y - r); ctx.lineTo(x + r, y - r); ctx.lineTo(x - r, y + r); ctx.lineTo(x + r, y + r); ctx.closePath(); }
+    else if (k === 'node') { ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.moveTo(x - r * .7, y - r * .7); ctx.lineTo(x + r * .7, y + r * .7); ctx.moveTo(x + r * .7, y - r * .7); ctx.lineTo(x - r * .7, y + r * .7); }
+    else if (k === 'ins') { ctx.rect(x - r, y - r, 2 * r, 2 * r); ctx.rect(x - r / 2, y - r / 2, r, r); }
+    ctx.stroke();
+    if (this.settings.snapLabels) {
+      const t = SNAP_NAME[k] || k; ctx.shadowBlur = 0; ctx.font = '600 11px "Segoe UI", sans-serif';
+      const w = ctx.measureText(t).width + 10;
+      ctx.fillStyle = 'rgba(17,19,23,.9)'; ctx.fillRect(x + 12, y + 10, w, 18);
+      ctx.fillStyle = '#3fe07a'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(t, x + 17, y + 19.5);
+    }
+    ctx.restore();
+  }
+  drawPreview(ctx) {
+    this.drawGrid(ctx);
+    if (this.tool && this.tool.preview) this.tool.preview(ctx);
+    if (this.snapPt) this.drawSnapMarker(ctx, this.snapPt);
     if (this.marker) {
       const m = this.marker, [x, y] = this.R.w2s(m.x, m.y, m.z);
       if (isFinite(x)) {
@@ -1285,7 +1407,7 @@ class App {
         this.closeModal();
         if (!str || !(h > 0)) return;
         this.textH = h;
-        const a = this.abs(p[0], p[1]);
+        const a = this.absP(p);
         this.editor.create(this.newDef('TEXT', { x: a[0], y: a[1], z: p[2] || 0, h, rot: r, str }));
       };
       d.querySelector('#mOk').onclick = ok; d.querySelector('#mNo').onclick = () => this.closeModal();
@@ -1425,6 +1547,10 @@ class App {
     this.lastCmd = name;
     switch (name) {
       case 'open': this.openDialog(); return;
+      case 'new': this.newDrawing(); return;
+      case 'settings': this.settingsDialog(); return;
+      case 'newlayer': if (this.store.info) this.newLayerDialog(); return;
+      case 'osnap': { const dd = $('snapDD'); this.openMenu(dd); return; }
       case 'save': if (S.done) Export.saveDXF(this, 'full'); return;
       case 'savesel': if (!S.selList.length) { this.toast('Önce kaydedilecek nesneleri seçin.'); return; } Export.saveDXF(this, 'subset', S.selList.slice()); return;
       case 'saveview': {
@@ -1447,7 +1573,7 @@ class App {
       case 'surface': this.surfaceDialog(); return;
       case 'find': this.findDialog(); return;
       case 'goto': this.gotoDialog(); return;
-      case 'theme': this.R.setTheme(!this.R.dark); $('view').style.background = this.R.dark ? '#1b1e23' : '#fff'; this.renderLayers(); this.vc.draw(); return;
+      case 'theme': this.setSetting('theme', this.R.dark ? 'light' : 'dark'); return;
       case 'help': this.helpDialog(); return;
       case 'erase': this.deleteSel(); return;
       case 'color': this.colorDialog(); return;
@@ -1477,19 +1603,146 @@ class App {
   // ───────────── olaylar
   startPan(e) { this.panning = { x: e.offsetX, y: e.offsetY, moved: false, btn: e.button }; $('ov').style.cursor = 'grabbing'; }
   stopAnim() { if (this.R.anim) { cancelAnimationFrame(this.R.anim); this.R.anim = null; this.viewChanged(); } }
+  // Açılır menüler: tek davranış. Menü ekrana sabit konumda açılır (şerit kırpmaz, sayfa kaymaz), ekran kenarına sığdırılır.
   initMenus() {
     const dds = [...document.querySelectorAll('.dd')];
-    const close = () => dds.forEach(d => d.classList.remove('open'));
-    const open = (dd) => { close(); this.updateButtons(); dd.classList.add('open'); };
+    const btnOf = (dd) => dd.querySelector(':scope > .dd-btn') || dd.querySelector(':scope .dd-btn');
+    const menuOf = (dd) => dd.querySelector(':scope > .dd-menu');
+    const place = (dd) => {
+      const menu = menuOf(dd), anchor = dd.classList.contains('split') || dd.id === 'snapDD' ? dd : btnOf(dd);
+      const r = anchor.getBoundingClientRect(), vw = window.innerWidth, vh = window.innerHeight;
+      menu.style.maxHeight = 'none'; menu.style.left = '0px'; menu.style.top = '0px';
+      const mw = menu.offsetWidth, mh = menu.scrollHeight;
+      const left = Math.max(6, Math.min(r.left, vw - mw - 6));
+      let top, avail;
+      if (dd.classList.contains('up')) { avail = r.top - 10; top = Math.max(6, r.top - 4 - Math.min(mh, avail)); }
+      else { avail = vh - r.bottom - 10; top = r.bottom + 4; }
+      menu.style.maxHeight = Math.max(140, avail) + 'px';
+      menu.style.left = left + 'px'; menu.style.top = top + 'px';
+    };
+    const close = () => { dds.forEach(d => d.classList.remove('open')); document.querySelectorAll('.mi.kb').forEach(b => b.classList.remove('kb')); };
+    const open = (dd) => { close(); this.updateButtons(); if (dd.id === 'snapDD') this.renderSnapMenu(); dd.classList.add('open'); place(dd); };
     for (const dd of dds) {
-      const btn = dd.querySelector(':scope > .dd-btn');
+      const btn = btnOf(dd);
       btn.addEventListener('click', (e) => { e.stopPropagation(); if (dd.classList.contains('open')) close(); else open(dd); });
-      btn.addEventListener('mouseenter', () => { if (dds.some(d => d.classList.contains('open')) && !dd.classList.contains('open')) open(dd); });
-      dd.querySelector('.dd-menu').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b && !b.disabled) close(); });
+      btn.addEventListener('mouseenter', () => { if (dds.some(d => d.classList.contains('open')) && !dd.classList.contains('open') && !dd.classList.contains('up')) open(dd); });
+      menuOf(dd).addEventListener('click', (e) => { const b = e.target.closest('button'); if (b && !b.disabled && !b.closest('[data-keep]')) close(); });
     }
     document.addEventListener('pointerdown', (e) => { if (!e.target.closest('.dd')) close(); if (!e.target.closest('#ctx')) $('ctx').style.display = 'none'; }, true);
-    this.closeMenus = close;
+    window.addEventListener('resize', close); window.addEventListener('blur', close);
+    this.closeMenus = close; this.openMenu = open; this.placeMenu = place;
     this.menusOpen = () => dds.some(d => d.classList.contains('open'));
+    // klavyeyle gezinme: ↑↓ öğeler, Enter seç, ←→ komşu menü
+    this.menuKey = (e) => {
+      const dd = dds.find(d => d.classList.contains('open')); if (!dd) return false;
+      const items = [...menuOf(dd).querySelectorAll('button.mi')].filter(b => !b.disabled && b.offsetParent);
+      let i = items.findIndex(b => b.classList.contains('kb'));
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault(); if (i >= 0) items[i].classList.remove('kb');
+        i = e.key === 'ArrowDown' ? (i + 1) % items.length : (i <= 0 ? items.length - 1 : i - 1);
+        items[i].classList.add('kb'); items[i].scrollIntoView({ block: 'nearest' }); return true;
+      }
+      if (e.key === 'Enter' && i >= 0) { e.preventDefault(); items[i].click(); return true; }
+      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        const top = dds.filter(d => !d.classList.contains('up')), k = top.indexOf(dd); if (k < 0) return true;
+        e.preventDefault(); open(top[(k + (e.key === 'ArrowRight' ? 1 : top.length - 1)) % top.length]); return true;
+      }
+      if (e.key === 'Escape') { close(); return true; }
+      return false;
+    };
+  }
+  renderSnapMenu() {
+    const m = $('snapMenu'), ap = this.settings.aperture || 12;
+    m.innerHTML = '<div class="mhead">Nesne yakalama · F3 aç/kapat</div>' +
+      SNAP_MODES.map(([k, l, sym]) => '<button class="mi' + (this.snapModes[k] ? ' on' : '') + '" data-keep="1" data-sm="' + k + '"><span class="ck"></span><span class="mk">' + sym + '</span><span class="lbl">' + l + '</span></button>').join('') +
+      '<div class="msep"></div><div style="display:flex;gap:4px;padding:2px 8px 4px" data-keep="1"><button class="mini" data-sa="all">Hepsi</button><button class="mini" data-sa="none">Hiçbiri</button><button class="mini" data-sa="def">Varsayılan</button></div>' +
+      '<div class="msub" data-keep="1">Hassasiyet <input type="range" min="4" max="30" value="' + ap + '" id="smAp"><span id="smApV" style="min-width:38px;text-align:right">' + ap + ' px</span></div>';
+    m.querySelectorAll('[data-sm]').forEach(b => b.onclick = () => {
+      const k = b.dataset.sm; this.snapModes[k] = !this.snapModes[k]; b.classList.toggle('on', this.snapModes[k]);
+      if (this.snapModes[k] && !this.snapOn) this.toggleSnap();
+      this.settings.snap = Object.assign({}, this.snapModes); saveSettings(this.settings);
+    });
+    m.querySelectorAll('[data-sa]').forEach(b => b.onclick = () => {
+      const a = b.dataset.sa;
+      for (const [k] of SNAP_MODES) this.snapModes[k] = a === 'all' ? true : a === 'none' ? false : DEFAULT_SNAP[k];
+      if (a !== 'none' && !this.snapOn) this.toggleSnap();
+      this.settings.snap = Object.assign({}, this.snapModes); saveSettings(this.settings); this.renderSnapMenu();
+    });
+    $('smAp').oninput = (e) => { this.settings.aperture = +e.target.value; $('smApV').textContent = e.target.value + ' px'; saveSettings(this.settings); };
+  }
+
+  // ───────────── ayarlar
+  applySettings() {
+    const st = this.settings, R = this.R;
+    R.setTheme(st.theme !== 'light'); $('view').style.background = R.dark ? '#1b1e23' : '#fff';
+    R.textLimit = st.textLimit; this.gizmo.enabled = !!st.gizmo;
+    if (st.style && st.style !== R.style) R.style = st.style;
+    this.renderLayers(); this.vc.draw(); this.update3DUI(); this.updateButtons(); R.request();
+  }
+  setSetting(k, v) { this.settings[k] = v; saveSettings(this.settings); this.applySettings(); }
+  settingsDialog() {
+    const st = this.settings;
+    const sw = (k, on) => '<button class="sw2' + (on ? ' on' : '') + '" data-sw="' + k + '"></button>';
+    const sel = (k, opts) => '<select data-sel="' + k + '">' + opts.map(([v, l]) => '<option value="' + v + '"' + (String(st[k]) === String(v) ? ' selected' : '') + '>' + l + '</option>').join('') + '</select>';
+    const rng = (k, mn, mx, stp, fmt) => '<input type="range" data-rng="' + k + '" min="' + mn + '" max="' + mx + '" step="' + stp + '" value="' + st[k] + '"><span data-rv="' + k + '" style="min-width:52px;text-align:right">' + fmt(st[k]) + '</span>';
+    const row = (lb, hint, ctl) => '<div class="lb">' + lb + (hint ? '<small>' + hint + '</small>' : '') + '</div><div class="ctl">' + ctl + '</div>';
+    const fmts = { aperture: v => v + ' px', zoomSpeed: v => (+v).toFixed(1) + '×' };
+    this.modal('<h2>Ayarlar</h2><div class="set">' +
+      '<h4>Görünüm</h4>' +
+      row('Tema', 'Çizim alanı ve arayüz arka planı', sel('theme', [['dark', 'Koyu'], ['light', 'Açık']])) +
+      row('Varsayılan görsel stil', 'Dosya açılınca', sel('style', [['wire', 'Tel kafes'], ['hidden', 'Gizli çizgi'], ['shaded', 'Gölgeli']])) +
+      row('Izgara', 'Plan görünümde uyarlanır ızgara', sw('grid', st.grid)) +
+      row('Yazı sınırı', 'Uzaktan bakarken aynı anda çizilen en çok yazı', sel('textLimit', [[5000, '5.000'], [25000, '25.000'], [100000, '100.000'], [1000000, 'Sınırsız']])) +
+      '<h4>Nesne yakalama</h4>' +
+      row('Hassasiyet', 'İmlecin yakalama yarıçapı', rng('aperture', 4, 30, 1, fmts.aperture)) +
+      row('Yakalama etiketi', 'İşaretin yanında "Uç nokta", "Merkez"… yazsın', sw('snapLabels', st.snapLabels)) +
+      row('Modlar', 'Durum çubuğundaki YAKALA ▴ menüsünden', '<button class="mini" id="setSnap">Yakalama modlarını aç</button>') +
+      '<h4>Düzenleme</h4>' +
+      row('Seçim tutamacı', 'Seçimde X/Y/Z taşı · döndür · ölçekle tutamacı', sw('gizmo', st.gizmo)) +
+      row('Dinamik komut girişi', 'Çizim alanında harf yazınca komut satırına gider (AutoCAD gibi)', sw('dynInput', st.dynInput)) +
+      '<h4>Fare</h4>' +
+      row('Tekerlek yönü', 'Yakınlaştırma yönünü ters çevir', sw('wheelInvert', st.wheelInvert)) +
+      row('Yakınlaştırma hızı', '', rng('zoomSpeed', 0.3, 3, 0.1, fmts.zoomSpeed)) +
+      '<h4>Yeni çizim</h4>' +
+      row('Birim', 'Dosya → Yeni çizim için', sel('newUnits', [[4, 'Milimetre'], [5, 'Santimetre'], [6, 'Metre'], [7, 'Kilometre']])) +
+      '</div><div class="btns"><button class="btn" id="setReset">Varsayılanlara dön</button><button class="btn pri" id="mOk">Kapat</button></div>', d => {
+      d.querySelectorAll('[data-sw]').forEach(b => b.onclick = () => { const k = b.dataset.sw; b.classList.toggle('on'); this.setSetting(k, b.classList.contains('on')); });
+      d.querySelectorAll('[data-sel]').forEach(el => el.onchange = () => { const k = el.dataset.sel, v = el.value; this.setSetting(k, /^\d+$/.test(v) ? +v : v); });
+      d.querySelectorAll('[data-rng]').forEach(el => el.oninput = () => { const k = el.dataset.rng; d.querySelector('[data-rv="' + k + '"]').textContent = fmts[k](el.value); this.setSetting(k, +el.value); });
+      d.querySelector('#setSnap').onclick = () => { this.closeModal(); this.openMenu($('snapDD')); };
+      d.querySelector('#setReset').onclick = () => { this.settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS)); this.snapModes = Object.assign({}, DEFAULT_SNAP); saveSettings(this.settings); this.applySettings(); this.closeModal(); this.settingsDialog(); };
+      d.querySelector('#mOk').onclick = () => this.closeModal();
+    });
+  }
+
+  // ───────────── katman oluştur
+  newLayerDialog() {
+    const S = this.store; let n = 1; while (S.layers.some(L => L.name.toUpperCase() === ('KATMAN' + n))) n++;
+    let aci = 7, cells = '';
+    for (let i = 1; i < 256; i++) cells += '<i data-aci="' + i + '" title="ACI ' + i + '" style="background:' + this.R.colorCss(this.core.ACI[i]) + (i === 7 ? ';outline:2px solid #fff' : '') + '"></i>';
+    this.modal('<h2>Yeni katman</h2><label>Ad</label><input type="text" id="lN" value="Katman' + n + '"><label>Renk <span id="lC" style="color:var(--text)">ACI 7</span></label><div class="aci" id="lA">' + cells + '</div>' +
+      '<div class="opts" style="margin-top:10px"><label><input type="checkbox" id="lCur" checked> Aktif katman yap</label></div>' +
+      '<div class="btns"><button class="btn" id="mNo">Vazgeç</button><button class="btn pri" id="mOk">Oluştur</button></div>', d => {
+      d.querySelector('#lA').onclick = (e) => { const c = e.target.closest('[data-aci]'); if (!c) return; d.querySelectorAll('#lA i').forEach(x => x.style.outline = ''); c.style.outline = '2px solid #fff'; aci = +c.dataset.aci; d.querySelector('#lC').textContent = 'ACI ' + aci; };
+      const ok = () => {
+        const name = d.querySelector('#lN').value.trim();
+        if (!name || /[<>\/":;?*|=`]/.test(name)) { this.toast('Geçersiz katman adı (< > / \\ " : ; ? * | = ` kullanılamaz).'); return; }
+        if (S.layers.some(L => L.name.toUpperCase() === name.toUpperCase())) { this.toast('Bu adda bir katman zaten var.'); return; }
+        const cur = d.querySelector('#lCur').checked;
+        this.closeModal(); this.addLayer(name, aci, cur);
+      };
+      d.querySelector('#mOk').onclick = ok; d.querySelector('#mNo').onclick = () => this.closeModal();
+      d.querySelector('#lN').onkeydown = (e) => { if (e.key === 'Enter') ok(); };
+    });
+  }
+  addLayer(name, aci, makeCurrent) {
+    const S = this.store, i = S.layers.length;
+    S.layers.push({ name, aci, rgba: this.core.aciToRgba(aci), off: false, frozen: false, locked: false, count: 0, isNew: true });
+    S.layerVis[i] = 1; this.R.updateLayers();
+    if (makeCurrent !== false) this.curLayer = i;
+    S.dirty = true; this.renderLayers(); this.updateDoc();
+    this.toast('"' + name + '" katmanı oluşturuldu' + (makeCurrent !== false ? ' ve aktif yapıldı' : ''));
+    return i;
   }
   bind() {
     const ov = $('ov'), R = this.R, S = this.store;
@@ -1506,10 +1759,7 @@ class App {
       this.updateButtons(); R.request();
     });
     $('tSnap').onclick = () => this.toggleSnap(); $('tOrtho').onclick = () => this.toggleOrtho();
-    document.querySelectorAll('[data-snap]').forEach(b => b.onclick = () => {
-      const k = b.dataset.snap; this.snapModes[k] = !this.snapModes[k]; b.classList.toggle('on', this.snapModes[k]);
-      if (this.snapModes[k] && !this.snapOn) this.toggleSnap();
-    });
+    $('layNew').onclick = () => { if (this.store.info) this.newLayerDialog(); else this.toast('Önce bir çizim açın ya da Dosya → Yeni çizim.'); };
     $('curLayer').onchange = (e) => this.setCurLayer(+e.target.value);
 
     // katman paneli
@@ -1608,7 +1858,8 @@ class App {
     ov.addEventListener('auxclick', (e) => { if (e.button === 1 && e.detail === 2) this.fit(); });
     ov.addEventListener('wheel', (e) => {
       e.preventDefault(); this.stopAnim();
-      const f = Math.pow(1.0018, -e.deltaY * (e.deltaMode === 1 ? 33 : 1));
+      const sp = (this.settings.zoomSpeed || 1) * (this.settings.wheelInvert ? -1 : 1);
+      const f = Math.pow(1.0018, -e.deltaY * (e.deltaMode === 1 ? 33 : 1) * sp);
       R.zoomAt(e.offsetX, e.offsetY, f); this.userMoved = true; this.track(e); this.gizmo.invalidate();
     }, { passive: false });
 
@@ -1643,6 +1894,7 @@ class App {
     });
     window.addEventListener('keydown', (e) => {
       if ($('modal').classList.contains('show')) { if (e.key === 'Escape') this.closeModal(); return; }
+      if (this.menusOpen() && this.menuKey(e)) return;
       const tgt = e.target;
       if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'SELECT' || tgt.tagName === 'TEXTAREA')) return;
       const k = e.key, ctrl = e.ctrlKey || e.metaKey;
@@ -1653,6 +1905,8 @@ class App {
       if (ctrl && k.toLowerCase() === 'o') { e.preventDefault(); this.openDialog(); return; }
       if (ctrl && k.toLowerCase() === 'a') { e.preventDefault(); this.selectAll(); return; }
       if (ctrl && k.toLowerCase() === 'f') { e.preventDefault(); this.findDialog(); return; }
+      if (ctrl && k.toLowerCase() === 'n') { e.preventDefault(); this.newDrawing(); return; }
+      if (ctrl && k === ',') { e.preventDefault(); this.settingsDialog(); return; }
       if (ctrl || e.altKey) return;
       if (k === 'Escape') { if (this.gizmo.drag) { this.gizmo.cancel(); return; } this.escape(); return; }
       if (k === 'Backspace' && this.tool.undoPt) { e.preventDefault(); this.tool.undoPt(); this.updatePrompt(); R.request(); return; }
@@ -1663,7 +1917,7 @@ class App {
       if (k === 'F3') { e.preventDefault(); this.toggleSnap(); return; }
       if (k === 'F8') { e.preventDefault(); this.toggleOrtho(); return; }
       // harf / rakam: komut satırına (AutoCAD dinamik giriş)
-      if (k.length === 1 && /[\p{L}\d@.\-]/u.test(k)) { cmd.focus(); return; }
+      if (this.settings.dynInput && k.length === 1 && /[\p{L}\d@.\-]/u.test(k)) { cmd.focus(); return; }
     });
     window.addEventListener('beforeunload', (e) => { if (this.store.dirty) { e.preventDefault(); e.returnValue = ''; } });
   }
@@ -1675,7 +1929,7 @@ class App {
   }
   showCoords() {
     const R = this.R, sp = this.snapPt;
-    if (sp) { const [ax, ay] = this.abs(sp.p[0], sp.p[1]); $('coords').textContent = 'X: ' + fmtC(ax) + '   Y: ' + fmtC(ay) + '   Z: ' + fmtC(sp.p[2]); return; }
+    if (sp) { const [ax, ay] = sp.abs || this.abs(sp.p[0], sp.p[1]); $('coords').textContent = 'X: ' + fmtC(ax) + '   Y: ' + fmtC(ay) + '   Z: ' + fmtC(sp.p[2]) + '  · ' + (SNAP_NAME[sp.kind] || ''); return; }
     if (!isFinite(this.mouse.wx)) { $('coords').textContent = 'X: —   Y: —'; return; }
     const [ax, ay] = this.abs(this.mouse.wx, this.mouse.wy);
     $('coords').textContent = 'X: ' + fmtC(ax) + '   Y: ' + fmtC(ay) + (R.is2D ? '' : '   Z: ' + fmtC(R.cz));

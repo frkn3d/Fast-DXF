@@ -1,4 +1,4 @@
-# DXF Okuyucu
+# Fast DXF
 
 Büyük DXF dosyalarını (1 GB ve üzeri) açmak, 2B/3B gezmek, düzenlemek ve farklı formatlarda kaydetmek için kurulum gerektirmeyen bir araç.
 
@@ -7,6 +7,7 @@ Büyük DXF dosyalarını (1 GB ve üzeri) açmak, 2B/3B gezmek, düzenlemek ve 
 `DXF Okuyucu.html` dosyasına çift tıklayın. **Chrome veya Edge** önerilir.
 
 - DXF'i pencereye sürükleyin ya da **Dosya → Aç** (Ctrl+O).
+- Dosya olmadan çizmeye başlamak için **Dosya → Yeni çizim** (Ctrl+N). Boş bir AutoCAD 2013 DXF'i açılır; birim Ayarlar'dan seçilir.
 - İnternet gerekmez; dosyanız bilgisayarınızdan çıkmaz.
 - Orijinal dosya hiçbir zaman değiştirilmez; kaydederken yeni bir dosya yazılır.
 
@@ -16,9 +17,28 @@ Büyük DXF dosyalarını (1 GB ve üzeri) açmak, 2B/3B gezmek, düzenlemek ve 
 |---|---|
 | Üst çubuk | Dosya menüsü (aç, kaydet, dışa aktar), geri al / yinele, belge adı, Bul, Git, tema, yardım |
 | Şerit | **Gezinme** · **Çiz** (tüm çizim araçları tek açılır menüde) · **Değiştir** · **Özellikler** · **Ölçüm** · **Görünüm** |
-| Sol panel | Katmanlar: arama, göster/gizle, çift tık: yalnız bu; sağ tık: katmandakileri seç, aktif yap, seçimi bu katmana taşı |
+| Sol panel | Katmanlar: **Yeni** ile katman oluşturma (ad + renk), arama, göster/gizle, çift tık: yalnız bu; sağ tık: katmandakileri seç, aktif yap, seçimi bu katmana taşı |
 | Sağ panel | Özellikler, seçim için **Dönüşüm** kartı (taşı / döndür / ölçekle / ayna / kot ata), arazi yüzeyleri |
-| Alt çubuk | Koordinat (yakalanan noktanın Z'si dahil), komut satırı, yakalama (uç / orta / yakın) ve orto |
+| Alt çubuk | Koordinat (yakalanan noktanın Z'si ve türü dahil), komut satırı, **YAKALA ▴** menüsü ve orto |
+
+### Nesne yakalama
+- YAKALA ile açılıp kapanır (F3). Yanındaki ▴ menüsünde şu modlar ayrı ayrı seçilir:
+  - Uç nokta, Orta nokta, Merkez, Çeyrek noktası
+  - Kesişim, Dik, En yakın
+  - Düğüm (nokta nesnesi), Ekleme noktası (blok, yazı)
+- Menüde yakalama hassasiyeti de piksel olarak ayarlanır.
+- Yakalanan noktada AutoCAD'deki gibi şekilli bir işaret ve tür etiketi ("Merkez" gibi) çıkar.
+- Daire ve yaylarda ekrandaki çokgenin köşeleri değil gerçek merkez ve çeyrek noktaları yakalanır.
+- **Kesinlik:** Yakalanan nokta nesnenin dosyadaki tam tanımından yeniden hesaplanır. Kesişimlerde iki nesnenin tam geometrisi kullanılır. Yani çizilen nesne kaynak koordinatı birebir alır; ekran hassasiyetinden kaynaklanan kayma olmaz.
+
+### Ayarlar (Ctrl+,)
+- **Görünüm:** tema, varsayılan görsel stil, ızgara, yazı sınırı
+- **Yakalama:** hassasiyet, etiket
+- **Düzenleme:** seçim tutamacı, dinamik komut girişi
+- **Fare:** tekerlek yönü, yakınlaştırma hızı
+- **Yeni çizim:** birim
+
+Ayarlar tarayıcıda saklanır.
 
 ### Komut satırı (AutoCAD gibi)
 - Çizim alanındayken harf yazmaya başlamanız yeterli; yazdıklarınız komut satırına gider.
@@ -151,17 +171,19 @@ Bu bilgisayarda ölçülen süreler:
 - **Taşınamayan nesneler:** Ölçü (DIMENSION) ve tablo nesneleri taşınamaz ve dönüştürülemez. Taramalar aynalanamaz (taşıma, döndürme ve ölçekleme çalışır).
 - **Aynalanan yazılar:** AutoCAD'in varsayılanı (MIRRTEXT=0) gibi okunur kalır. Blok içindeki yazıların ekrandaki görünümü bu durumda farklı olabilir.
 - **İkili (binary) DXF:** Düzenlemeler kaydedilemez; yalnız seçimi ayrı dosyaya kaydetme çalışır.
+- **Yeni katmanlar:** Kaydederken dosyanın katman tablosuna geçerli LAYER kaydı olarak eklenir.
 - **Aynı dosyaya kaydetme:** Açık olan dosyanın üzerine kaydedilemez, çünkü kaydederken o dosyadan okunur.
 
 ## Klasör yapısı
 
 ```
-DXF Okuyucu.html      uygulama (buna çift tıklayın)
+DXF Okuyucu.html      uygulama: Fast DXF (buna çift tıklayın)
 js/dxf-core.js        ayrıştırıcı, geometri ve yüzey üretimi, kaydetme / dönüşüm motoru (worker'da da çalışır)
 js/workers.js         arka plan işçileri (okuma, kaydetme)
 js/store.js           veri deposu, mekânsal ızgara, 2B/3B seçim, yakalama
 js/render.js          WebGL2 çizim (tel kafes / gizli / gölgeli, 2B + 3B kamera) + yazı katmanı
 js/viewcube.js        görünüm küpü
+js/template.js        "Yeni çizim" için boş DXF şablonu
 js/geom.js            budama, uzatma, öteleme, kavis, böl, birleştir, patlat; Delaunay üçgenleme
 js/edit.js            düzenleme komutları, dönüşümler, geri al / yinele
 js/gizmo.js           seçim dönüşüm tutamacı

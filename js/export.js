@@ -80,12 +80,14 @@ const Export = {
         ops.push(changed(e) ? { fs: E.fs.a[id], fe: E.fe.a[id], kind: 'patch', ed: toEd(e) } : { fs: E.fs.a[id], fe: E.fe.a[id], kind: 'keep' });
       }
     }
-    if (mode === 'full' && !ops.length && !copies.length && !news.length) {
+    const newLayers = S.layers.filter(L => L && L.isNew).map(L => ({ name: L.name, aci: L.aci }));
+    if (mode === 'full' && !ops.length && !copies.length && !news.length && !newLayers.length && !S.isNew) {
       if (!await app.confirm('Kaydedilecek değişiklik yok. Yine de dosyanın kopyası kaydedilsin mi?')) return;
     }
     const msg = {
       mode, encoding: info.encoding, eol: info.eol, version: info.version, owner: info.modelHandle,
-      handseed: info.handseed, handseedHex: info.handseedHex, entStart: info.entStart, entEnd: info.entEnd, ops, copies, news
+      handseed: info.handseed, handseedHex: info.handseedHex, entStart: info.entStart, entEnd: info.entEnd, ops, copies, news,
+      newLayers, layerEnd: info.layerEnd === undefined ? -1 : info.layerEnd, layerTableHandle: info.layerTableHandle || ''
     };
     app.busy('DXF hazırlanıyor…');
     const w = spawnWorker(saveWorkerMain);
@@ -99,7 +101,7 @@ const Export = {
     } catch (e) { app.busy(null); w.terminate(); app.alert('Kaydetme hatası: ' + e.message); return; }
     w.terminate();
     app.busy('Diske yazılıyor… (' + (res.blob.size / 1048576).toFixed(1) + ' MB)');
-    const name = this.baseName(app) + (mode === 'full' ? '_duzenlenmis.dxf' : '_secim.dxf');
+    const name = this.baseName(app) + (mode === 'full' ? (S.isNew ? '.dxf' : '_duzenlenmis.dxf') : '_secim.dxf');
     try {
       const ok = await this.saveBlob(app, res.blob, name, 'DXF çizimi', 'application/dxf', 'dxf');
       app.busy(null);
