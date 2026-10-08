@@ -1,0 +1,1738 @@
+/* DXF Okuyucu — arayüz, araçlar, komutlar ve dosya işlemleri */
+'use strict';
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const fmtN = (n) => n.toLocaleString('tr-TR');
+const fmtMB = (b) => (b / 1048576).toLocaleString('tr-TR', { maximumFractionDigits: 1 }) + ' MB';
+const num = (s) => { if (s === undefined || s === null) return NaN; s = String(s).trim().replace(/\s/g, ''); if (!s) return NaN; if (s.indexOf(',') >= 0 && s.indexOf('.') < 0) s = s.replace(',', '.'); return +s; };
+const UNITS = { 0: 'birimsiz', 1: 'inç', 2: 'fit', 4: 'mm', 5: 'cm', 6: 'metre', 7: 'km' };
+const UNIT_SFX = { 1: ' in', 2: ' ft', 4: ' mm', 5: ' cm', 6: ' m', 7: ' km' };
+const ISO = 35.264;
+// Hazır görünümler (az: göz yönünün X ekseninden açısı, el: yükseklik açısı; Z yukarı)
+const VIEWS = {
+  top: [-90, 90, 'Üst (plan)'], bottom: [-90, -90, 'Alt'], front: [-90, 0, 'Ön'], back: [90, 0, 'Arka'], left: [180, 0, 'Sol'], right: [0, 0, 'Sağ'],
+  sw: [-135, ISO, 'GB izometrik'], se: [-45, ISO, 'GD izometrik'], ne: [45, ISO, 'KD izometrik'], nw: [135, ISO, 'KB izometrik']
+};
+// Plan görünüm gerektiren araçlar (nokta girişi / çizim / değiştirme / ölçüm)
+const DRAW_TOOLS = ['line', 'pline', 'spline', 'rect', 'polygon', 'circle', 'circle3', 'arc', 'ellipse', 'point', 'text'];
+const PLAN_TOOLS = new Set(DRAW_TOOLS.concat(['move', 'copy', 'rotate', 'scale', 'mirror', 'offset', 'trim', 'extend', 'fillet', 'chamfer', 'break', 'measure', 'area']));
+const TOOL_ICON = { line: 'line', pline: 'pline', spline: 'spline', rect: 'rect', polygon: 'polygon', circle: 'circle', circle3: 'circle', arc: 'arc', ellipse: 'ellipse', point: 'point', text: 'text' };
+// Komut tablosu: [kısaltmalar, tür ('t' araç, 'c' komut), ad, açıklama, grup]
+const COMMANDS = [
+  [['l', 'line', 'çizgi'], 't', 'line', 'Çizgi', 'Çiz'],
+  [['pl', 'pline', 'polyline'], 't', 'pline', 'Polyline', 'Çiz'],
+  [['spl', 'spline'], 't', 'spline', 'Spline (denetim noktalı)', 'Çiz'],
+  [['rec', 'rectang', 'dikdörtgen'], 't', 'rect', 'Dikdörtgen', 'Çiz'],
+  [['pol', 'polygon', 'çokgen'], 't', 'polygon', 'Çokgen', 'Çiz'],
+  [['c', 'circle', 'daire'], 't', 'circle', 'Daire (merkez, yarıçap)', 'Çiz'],
+  [['c3p', '3p'], 't', 'circle3', 'Daire (3 nokta)', 'Çiz'],
+  [['a', 'arc', 'yay'], 't', 'arc', 'Yay (3 nokta)', 'Çiz'],
+  [['el', 'ellipse', 'elips'], 't', 'ellipse', 'Elips', 'Çiz'],
+  [['po', 'point', 'nokta'], 't', 'point', 'Nokta', 'Çiz'],
+  [['dt', 't', 'text', 'metin'], 't', 'text', 'Metin', 'Çiz'],
+  [['m', 'move', 'taşı'], 't', 'move', 'Taşı', 'Değiştir'],
+  [['co', 'cp', 'copy', 'kopyala'], 't', 'copy', 'Kopyala', 'Değiştir'],
+  [['ro', 'rotate', 'döndür'], 't', 'rotate', 'Döndür', 'Değiştir'],
+  [['sc', 'scale', 'ölçekle'], 't', 'scale', 'Ölçekle', 'Değiştir'],
+  [['mi', 'mirror', 'ayna'], 't', 'mirror', 'Ayna', 'Değiştir'],
+  [['o', 'offset', 'ötele'], 't', 'offset', 'Öteleme (paralel kopya)', 'Değiştir'],
+  [['tr', 'trim', 'buda'], 't', 'trim', 'Buda', 'Değiştir'],
+  [['ex', 'extend', 'uzat'], 't', 'extend', 'Uzat', 'Değiştir'],
+  [['f', 'fillet', 'kavis'], 't', 'fillet', 'Kavis (köşe yuvarlat)', 'Değiştir'],
+  [['cha', 'chamfer', 'pah'], 't', 'chamfer', 'Pah', 'Değiştir'],
+  [['br', 'break', 'böl'], 't', 'break', 'Noktada böl', 'Değiştir'],
+  [['j', 'join', 'birleştir'], 'c', 'join', 'Birleştir', 'Değiştir'],
+  [['x', 'explode', 'patlat'], 'c', 'explode', 'Patlat (polyline → çizgi/yay)', 'Değiştir'],
+  [['e', 'erase', 'sil'], 'c', 'erase', 'Sil', 'Değiştir'],
+  [['flatten', 'kot', 'düzleştir'], 'c', 'flatten', 'Kot ata / düzleştir', 'Değiştir'],
+  [['di', 'dist', 'ölç', 'mea'], 't', 'measure', 'Mesafe ölç (ΔZ, eğim)', 'Ölçüm'],
+  [['aa', 'area', 'alan'], 't', 'area', 'Alan ölç', 'Ölçüm'],
+  [['z', 'zoom'], 't', 'zoomwin', 'Pencereyle yakınlaş', 'Görünüm'],
+  [['ze', 'zoome', 'sığdır'], 'c', 'fit', 'Çizime sığdır', 'Görünüm'],
+  [['p', 'pan', 'kaydır'], 't', 'pan', 'Kaydır', 'Görünüm'],
+  [['3do', '3dorbit', 'orbit', 'yörünge'], 't', 'orbit', '3B yörünge', 'Görünüm'],
+  [['plan', 'üst'], 'c', 'view:top', 'Üst (plan) görünüm', 'Görünüm'],
+  [['ön', 'front'], 'c', 'view:front', 'Ön görünüm', 'Görünüm'],
+  [['arka', 'back'], 'c', 'view:back', 'Arka görünüm', 'Görünüm'],
+  [['sol', 'left'], 'c', 'view:left', 'Sol görünüm', 'Görünüm'],
+  [['sağ', 'right'], 'c', 'view:right', 'Sağ görünüm', 'Görünüm'],
+  [['alt', 'bottom'], 'c', 'view:bottom', 'Alt görünüm', 'Görünüm'],
+  [['gbiso', 'swiso'], 'c', 'view:sw', 'GB izometrik', 'Görünüm'],
+  [['gdiso', 'seiso'], 'c', 'view:se', 'GD izometrik', 'Görünüm'],
+  [['kdiso', 'neiso'], 'c', 'view:ne', 'KD izometrik', 'Görünüm'],
+  [['kbiso', 'nwiso'], 'c', 'view:nw', 'KB izometrik', 'Görünüm'],
+  [['ev', 'home'], 'c', 'home', 'Ev görünümü', 'Görünüm'],
+  [['persp', 'perspektif'], 'c', 'persp', 'Perspektif / paralel', 'Görünüm'],
+  [['tel', 'wire', 'wireframe'], 'c', 'style:wire', 'Görsel stil: tel kafes', 'Görünüm'],
+  [['gizli', 'hide', 'hidden'], 'c', 'style:hidden', 'Görsel stil: gizli çizgi', 'Görünüm'],
+  [['gölgeli', 'shade', 'shaded'], 'c', 'style:shaded', 'Görsel stil: gölgeli', 'Görünüm'],
+  [['arazi', 'tin', 'surface', 'yüzey'], 'c', 'surface', 'Arazi yüzeyi (TIN) oluştur', 'Görünüm'],
+  [['bul', 'find'], 'c', 'find', 'Metin bul', 'Araçlar'],
+  [['git', 'goto'], 'c', 'goto', 'Koordinata git', 'Araçlar'],
+  [['u', 'undo', 'geri'], 'c', 'undo', 'Geri al', 'Araçlar'],
+  [['redo', 'yinele'], 'c', 'redo', 'Yinele', 'Araçlar'],
+  [['save', 'kaydet', 'qsave'], 'c', 'save', 'DXF kaydet', 'Dosya'],
+  [['open', 'aç'], 'c', 'open', 'Aç', 'Dosya']
+];
+const ALIAS = new Map(); for (const c of COMMANDS) for (const a of c[0]) ALIAS.set(a, c);
+
+class App {
+  constructor() {
+    this.core = DXFCore();
+    this.store = new Store(this.core);
+    try { this.R = new Renderer($('gl'), $('ov'), this.store); }
+    catch (e) { document.body.innerHTML = '<div style="padding:40px;font:16px sans-serif;color:#ddd">' + esc(e.message) + '</div>'; throw e; }
+    this.editor = new Editor(this);
+    this.gizmo = new Gizmo(this);
+    this.snapOn = true; this.snapModes = { end: true, mid: true, near: false };
+    this.ortho = false; this.curLayer = 0;
+    this.mouse = { sx: 0, sy: 0, wx: 0, wy: 0 };
+    this.snapPt = null; this.userMoved = false; this.worker = null;
+    this.textH = null; this.lastFit = 0; this.marker = null; this.lastCmd = null;
+    this.offsetDist = 1; this.filletR = 0; this.chamferD = 1; this.polySides = 6;
+    this.R.preview = (ctx) => this.drawPreview(ctx);
+    this.R.onDraw = () => this.afterDraw();
+    this.R.setTheme(true);
+    this.vc = new ViewCube(this, $('view'));
+    this.initTools();
+    this.bind();
+    this.setTool('select');
+    new ResizeObserver(() => { this.R.resize(); }).observe($('view'));
+    this.updateButtons(); this.update3DUI(); this.updateDoc();
+  }
+
+  // ───────────── yardımcı diyaloglar
+  modal(html, onShow) {
+    $('dlg').innerHTML = html; $('modal').classList.add('show');
+    if (onShow) onShow($('dlg'));
+    const f = $('dlg').querySelector('input,select,button.pri'); if (f) setTimeout(() => { if (f.isConnected) f.focus(); }, 30);
+  }
+  closeModal() { $('modal').classList.remove('show'); $('dlg').innerHTML = ''; }
+  alert(msg) {
+    return new Promise(res => this.modal('<h2>Bilgi</h2><div style="max-width:520px">' + esc(msg) + '</div><div class="btns"><button class="btn pri" id="mOk">Tamam</button></div>',
+      d => { d.querySelector('#mOk').onclick = () => { this.closeModal(); res(); }; }));
+  }
+  confirm(msg) {
+    return new Promise(res => this.modal('<h2>Onay</h2><div style="max-width:520px">' + esc(msg) + '</div><div class="btns"><button class="btn" id="mNo">Vazgeç</button><button class="btn pri" id="mOk">Evet</button></div>',
+      d => { d.querySelector('#mOk').onclick = () => { this.closeModal(); res(true); }; d.querySelector('#mNo').onclick = () => { this.closeModal(); res(false); }; }));
+  }
+  toast(msg, ms) {
+    const t = $('toast'); t.textContent = msg; t.style.display = 'block';
+    clearTimeout(this._toastT); this._toastT = setTimeout(() => t.style.display = 'none', ms || 2600);
+  }
+  busy(msg) {
+    const p = $('prog');
+    if (!msg) { if (!this.loading) p.style.display = 'none'; return; }
+    p.style.display = 'block'; $('progText').textContent = msg; $('progBar').style.width = '100%';
+  }
+  yieldUI() { return new Promise(r => setTimeout(r, 16)); }
+  prompt(msg) { $('prompt').textContent = msg; }
+  contextMenu(x, y, items) {
+    const m = $('ctx');
+    m.innerHTML = items.map((it, i) => it === '-' ? '<hr>' : '<button data-i="' + i + '"' + (it.disabled ? ' disabled' : '') + '>' + esc(it.label) + '</button>').join('');
+    m.style.display = 'block';
+    const r = m.getBoundingClientRect();
+    m.style.left = Math.min(x, window.innerWidth - r.width - 4) + 'px'; m.style.top = Math.min(y, window.innerHeight - r.height - 4) + 'px';
+    m.querySelectorAll('button').forEach(b => b.onclick = (e) => { e.stopPropagation(); m.style.display = 'none'; items[+b.dataset.i].fn(); });
+  }
+  unit() { const i = this.store.info; return i ? (UNIT_SFX[i.units] || '') : ''; }
+  updateDoc() {
+    const S = this.store;
+    $('docName').innerHTML = S.file ? '<b>' + esc(S.file.name) + '</b>' + (S.dirty ? ' <span class="dirty">● kaydedilmemiş değişiklik</span>' : '') : 'Dosya açılmadı';
+  }
+
+  // ───────────── dosya açma
+  async openDialog() {
+    if (window.showOpenFilePicker) {
+      try {
+        const [h] = await window.showOpenFilePicker({ types: [{ description: 'DXF çizimi', accept: { 'application/dxf': ['.dxf'] } }] });
+        this.load(await h.getFile(), h); return;
+      } catch (e) { if (e && e.name === 'AbortError') return; }
+    }
+    $('fileIn').click();
+  }
+  async load(file, handle) {
+    if (!file) return;
+    if (this.store.dirty && !await this.confirm('Kaydedilmemiş değişiklikler var. Yine de yeni dosya açılsın mı?')) return;
+    if (this.worker) { this.worker.terminate(); this.worker = null; }
+    this.R.freeAll(); this.store.clear(); this.editor.reset(); this.setTool('select'); this.gizmo.invalidate();
+    const R = this.R; R.az = -90; R.el = 90; R.persp = false; R.cz = 0; R.zcolor = false; this.setBlockFlat(false);
+    this.store.file = file; this.openHandle = handle || null;
+    this.loading = true; this.userMoved = false; this.firstFit = false; this.t0 = performance.now();
+    $('drop').classList.add('hide');
+    $('prog').style.display = 'block'; $('progText').textContent = file.name + ' okunuyor…'; $('progBar').style.width = '0%';
+    document.title = file.name + ' — DXF Okuyucu';
+    this.renderLayers(); this.renderProps(); this.updateButtons(); this.update3DUI(); this.updateDoc();
+    const w = this.worker = spawnWorker(parseWorkerMain);
+    w.onmessage = (ev) => this.onMsg(ev.data);
+    w.onerror = (ev) => { this.loading = false; this.busy(null); this.alert('Okuma hatası: ' + ev.message); };
+    w.postMessage({ file, opts: {} });
+  }
+  onMsg(m) {
+    const S = this.store, d = m.data;
+    switch (m.type) {
+      case 'layers': S.onLayers(d); this.R.updateLayers(); this.renderLayers(); break;
+      case 'chunk': S.onChunk(d); this.R.request(); break;
+      case 'ents':
+        S.onEnts(d);
+        if (!this.firstFit && !this.userMoved) { const bb = robustBox(d.bb); if (bb) { this.R.fit(bb); this.firstFit = true; } }
+        break;
+      case 'texts': S.onTexts(d); this.R.request(); break;
+      case 'inst': S.onInst(d); this.R.request(); break;
+      case 'blocks': S.onBlocks(d); this.R.request(); break;
+      case 'progress': {
+        const p = d.read / d.size;
+        $('progBar').style.width = (p * 100).toFixed(1) + '%';
+        const el = (performance.now() - this.t0) / 1000;
+        $('progText').textContent = S.file.name + ' — %' + (p * 100).toFixed(0) + ' · ' + fmtN(d.ents) + ' nesne · ' + el.toFixed(1) + ' sn' +
+          (p > 0.05 ? ' · kalan ~' + Math.max(0, el / p - el).toFixed(0) + ' sn' : '');
+        break;
+      }
+      case 'done': {
+        this.loading = false;
+        this.worker.terminate(); this.worker = null;
+        S.onDone(d);
+        $('prog').style.display = 'none';
+        this.curLayer = S.layerVis[0] ? 0 : Math.max(0, S.layers.findIndex((L, i) => S.layerVis[i]));
+        this.R.zcr = S.zview.slice();
+        if (!this.userMoved) this.R.fit(S.view0);
+        this.R.updateLayers(); this.renderLayers(); this.renderProps(); this.updateButtons(); this.update3DUI(); this.updateDoc();
+        const sec = ((performance.now() - this.t0) / 1000).toFixed(1);
+        const bad = S.suspiciousBlocks();
+        if (bad.blocks) this.setBlockFlat(true);
+        const faces = S.nTri ? ' · ' + fmtN(Math.round(S.nTri)) + ' yüzey üçgeni (Gölgeli stilde görünür)' : '';
+        this.toast(S.file.name + ' açıldı: ' + fmtN(S.nEnt) + ' nesne, ' + sec + ' sn' + (S.has3D ? ' · 3B veri var (Shift + orta tuş ile yörünge)' : '') + faces +
+          (bad.blocks ? ' · ' + bad.blocks + ' sembol bloğunun iç kotu hatalı görünüyor (' + fmtN(bad.refs) + ' referans); 3B görünümde ekleme kotunda düz çiziliyor.' : ''), bad.blocks ? 9000 : 5000);
+        if (!d.eof && !d.binary) this.toast('Uyarı: dosya EOF ile bitmiyor (yarım kalmış olabilir). Okunabilen kısım gösteriliyor.', 6000);
+        break;
+      }
+      case 'error':
+        this.loading = false; $('prog').style.display = 'none';
+        this.alert('Dosya okunamadı: ' + d);
+        break;
+    }
+  }
+
+  // ───────────── katman paneli
+  renderLayers() {
+    const S = this.store, q = ($('laySearch').value || '').toLocaleLowerCase('tr');
+    const idx = S.layers.map((L, i) => i).filter(i => S.layers[i] && (!q || S.layers[i].name.toLocaleLowerCase('tr').includes(q)));
+    idx.sort((a, b) => S.layers[a].name.localeCompare(S.layers[b].name, 'tr', { numeric: true }));
+    const eyeOn = '<svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+    const eyeOff = '<svg viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 6.1A10 10 0 0112 6c7 0 11 6 11 6a17 17 0 01-3.3 3.9M6.3 6.3C3 8.4 1 12 1 12s4 7 11 7a10 10 0 005.7-1.7"/></svg>';
+    const parts = [];
+    for (const i of idx.slice(0, 5000)) {
+      const L = S.layers[i], on = S.layerVis[i];
+      parts.push('<div class="lay' + (on ? '' : ' off') + (i === this.curLayer ? ' cur' : '') + '" data-i="' + i + '" title="' + esc(L.name) + (L.locked ? ' (kilitli)' : '') + '">' +
+        '<button class="eye" data-eye="1">' + (on ? eyeOn : eyeOff) + '</button><span class="sw" style="background:' + this.R.colorCss(L.rgba) + '"></span>' +
+        '<span class="nm">' + esc(L.name) + '</span><span class="ct">' + fmtN(L.count || 0) + '</span></div>');
+    }
+    $('layers').innerHTML = parts.join('');
+    $('layCount').textContent = S.layers.length ? '(' + S.layers.length + ')' : '';
+    // aktif katman seçici
+    const sel = $('curLayer'), sorted = S.layers.map((L, i) => [L.name, i]).sort((a, b) => a[0].localeCompare(b[0], 'tr', { numeric: true }));
+    sel.innerHTML = sorted.length ? sorted.map(([n, i]) => '<option value="' + i + '"' + (i === this.curLayer ? ' selected' : '') + '>' + esc(n) + '</option>').join('') : '<option>—</option>';
+  }
+  setCurLayer(i) { this.curLayer = i; this.renderLayers(); }
+  setLayerVis(fn) {
+    const S = this.store;
+    for (let i = 0; i < S.layers.length; i++) S.layerVis[i] = fn(i, S.layerVis[i]) ? 1 : 0;
+    this.R.updateLayers(); this.renderLayers();
+    const keep = S.selList.filter(id => S.layerVis[S.E.layer.a[id]]);
+    if (keep.length !== S.selList.length) { S.setSel(keep, 'set'); this.selChanged(); }
+  }
+  selectWhere(fn, label) {
+    const S = this.store; if (!this.ready()) return;
+    const E = S.E, fl = E.flags.a, ids = [];
+    for (let id = 0; id < S.nEnt; id++) if (!(fl[id] & F_DEL) && fn(id)) ids.push(id);
+    S.setSel(ids, 'set'); this.selChanged();
+    this.toast(fmtN(S.selList.length) + ' nesne seçildi' + (label ? ' (' + label + ')' : ''));
+  }
+  selectLayer(i) {
+    const S = this.store;
+    if (!S.layerVis[i]) { S.layerVis[i] = 1; this.R.updateLayers(); this.renderLayers(); }
+    this.selectWhere(id => S.E.layer.a[id] === i, 'katman ' + S.layers[i].name);
+  }
+
+  // ───────────── özellikler paneli
+  renderProps() {
+    const S = this.store, P = $('props');
+    if (!S.file) { P.innerHTML = '<div style="color:var(--muted)">Dosya açılmadı.</div>'; return; }
+    const info = S.info;
+    const o = info ? info.origin : [0, 0];
+    const TN = this.core.TYPE_NAMES;
+    if (!S.selList.length) {
+      if (!info) { P.innerHTML = '<div style="color:var(--muted)">Okunuyor…</div>'; return; }
+      const st = Object.entries(info.stats).sort((a, b) => b[1] - a[1]).map(([k, v]) => '<span class="pill sel" data-type="' + esc(k) + '" title="Bu tipteki tüm nesneleri seç">' + esc(k) + ' ' + fmtN(v) + '</span>').join('');
+      const un = Object.entries(info.unsupported).map(([k, v]) => '<span class="pill" style="color:var(--warn)">' + esc(k) + ' ' + fmtN(v) + '</span>').join('');
+      const surf = S.surfaces.map((s, i) => '<div class="xr" style="grid-template-columns:1fr auto auto"><span>' + esc(s.name) + '<br><span style="color:var(--muted);font-size:11px">' + fmtN(s.n / 3) + ' üçgen</span></span>' +
+        '<button class="mini" data-sv="' + i + '">' + (s.visible ? 'Gizle' : 'Göster') + '</button><button class="mini" data-sd="' + i + '">Sil</button></div>').join('');
+      P.innerHTML = '<table>' +
+        tr('Dosya', esc(S.file.name)) + tr('Boyut', fmtMB(S.file.size)) +
+        tr('Sürüm', esc(info.version || '?') + (info.binary ? ' (ikili)' : '')) + tr('Kodlama', esc(info.encoding)) +
+        tr('Birim', esc(UNITS[info.units] || ('kod ' + info.units))) +
+        tr('Nesne', fmtN(S.nEnt)) + tr('Yazı', fmtN(S.nText)) + tr('Blok referansı', fmtN(S.nInst)) +
+        (S.nTri ? tr('Yüzey üçgeni', fmtN(Math.round(S.nTri))) : '') +
+        tr('Katman', fmtN(S.layers.length)) + tr('Okuma süresi', (info.ms / 1000).toFixed(1) + ' sn') +
+        tr('Kapsam', S.ext ? fmtP(S.ext[0] + o[0], S.ext[1] + o[1]) + '<br>' + fmtP(S.ext[2] + o[0], S.ext[3] + o[1]) : '—') +
+        (S.has3D ? tr('Kot (Z)', fmtC(S.zext[0]) + ' … ' + fmtC(S.zext[1]) + (S.zview[0] !== S.zext[0] || S.zview[1] !== S.zext[1] ? '<br><span style="color:var(--muted)">yoğun: ' + fmtC(S.zview[0]) + ' … ' + fmtC(S.zview[1]) + '</span>' : '')) : '') +
+        '</table><div style="margin-top:10px;color:var(--muted);font-size:11px">Tipe tıklayın: o tipteki tüm nesneler seçilir</div><div>' + st + '</div>' +
+        (un ? '<div style="margin-top:8px;color:var(--muted)">Gösterilemeyen tipler:</div><div>' + un + '</div>' : '') +
+        (surf ? '<div class="card"><div class="ch">Arazi yüzeyleri</div><div class="cb">' + surf + '</div></div>' : '') +
+        (info.warnings.length ? '<div style="margin-top:8px;color:var(--warn)">' + info.warnings.map(esc).join('<br>') + '</div>' : '') +
+        (S.dirty ? '<div style="margin-top:10px;color:var(--warn)">Kaydedilmemiş değişiklikler var.</div>' : '');
+      P.querySelectorAll('[data-type]').forEach(el => el.onclick = () => {
+        const t = el.dataset.type, codes = new Set(); TN.forEach((n, i) => { if (n === t) codes.add(i); });
+        this.selectWhere(id => codes.has(S.E.type.a[id]) && S.layerVis[S.E.layer.a[id]], t);
+      });
+      P.querySelectorAll('[data-sv]').forEach(b => b.onclick = () => { const s = S.surfaces[+b.dataset.sv]; s.visible = !s.visible; this.R.request(); this.renderProps(); });
+      P.querySelectorAll('[data-sd]').forEach(b => b.onclick = () => { const s = S.surfaces.splice(+b.dataset.sd, 1)[0]; this.R.freeSurface(s); this.R.request(); this.renderProps(); this.updateButtons(); });
+      return;
+    }
+    const E = S.E, ids = S.selList;
+    const cnt = {}; let len = 0, bb = [Infinity, Infinity, -Infinity, -Infinity], z0 = Infinity, z1 = -Infinity;
+    for (const id of ids) {
+      const t = TN[E.type.a[id]] || '?'; cnt[t] = (cnt[t] || 0) + 1;
+      if (ids.length < 200000) len += S.length(id);
+      const b = E.bb.a; bb[0] = Math.min(bb[0], b[4 * id]); bb[1] = Math.min(bb[1], b[4 * id + 1]); bb[2] = Math.max(bb[2], b[4 * id + 2]); bb[3] = Math.max(bb[3], b[4 * id + 3]);
+      z0 = Math.min(z0, E.zr.a[2 * id]); z1 = Math.max(z1, E.zr.a[2 * id + 1]);
+    }
+    const layOpts = S.layers.map((L, i) => [L.name, i]).sort((a, b) => a[0].localeCompare(b[0], 'tr', { numeric: true }))
+      .map(([n, i]) => '<option value="' + i + '">' + esc(n) + '</option>').join('');
+    const types = Object.entries(cnt);
+    let html = '<table>' + tr('Seçili', fmtN(ids.length)) + tr('Tipler', types.map(([k, v]) => '<span class="pill' + (types.length > 1 ? ' sel' : '') + '" data-type="' + esc(k) + '"' + (types.length > 1 ? ' title="Seçimi yalnız bu tiple sınırla"' : '') + '>' + esc(k) + ' ' + fmtN(v) + '</span>').join(''));
+    const u = this.unit();
+    if (ids.length === 1) {
+      const id = ids[0], L = S.layers[E.layer.a[id]], aci = E.aci.a[id];
+      html += tr('Katman', esc(L ? L.name : '?')) +
+        tr('Renk', '<span class="sw" style="display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px;background:' + this.R.colorCss(E.color.a[id]) + '"></span> ' + (aci === 256 ? 'Katmana göre' : aci === 0 ? 'Bloğa göre' : 'ACI ' + aci));
+      if (E.tc.a[id] && !E.ic.a[id]) html += tr('Metin', esc(S.TS[E.ts.a[id]]).replace(/\n/g, '<br>')) + tr('Yükseklik', fmtC(S.TX.h.a[E.ts.a[id]]));
+      if (E.ic.a[id]) { const B = S.blocks[S.IN.blk.a[E.is.a[id]]]; html += tr('Blok', esc(B ? B.name : '?')); }
+      if (E.rc.a[id]) html += tr('Yüzey', fmtN(E.rc.a[id] / 3) + ' üçgen');
+      const A = S.area(id); if (A !== null) html += tr('Alan', fmtC(A) + (u ? u + '²' : ''));
+      if (E.flags.a[id] & F_NEW) html += tr('Durum', '<span style="color:var(--ok)">Yeni (kaydedilmedi)</span>');
+      else if (S.edits.has(id) && Export.editState(this).changed(S.edits.get(id))) html += tr('Durum', '<span style="color:var(--warn)">Değiştirildi</span>');
+    }
+    if (len) html += tr('Toplam uzunluk', fmtC(len) + u + '<br><span style="color:var(--muted);font-size:11px">plan (yatay) uzunluk</span>');
+    if (z0 <= z1) html += tr('Kot (Z)', z0 === z1 ? fmtC(z0) : fmtC(z0) + ' … ' + fmtC(z1));
+    html += tr('Kutu', fmtP(bb[0] + o[0], bb[1] + o[1]) + '<br>' + fmtP(bb[2] + o[0], bb[3] + o[1]) + '<br>' + fmtC(bb[2] - bb[0]) + ' × ' + fmtC(bb[3] - bb[1]));
+    const c = this.gizmo.origin(), ca = this.abs(c[0], c[1]);
+    html += '</table>' +
+      '<div class="card"><div class="ch">Dönüşüm<span style="text-transform:none;letter-spacing:0;font-weight:400">merkez ' + fmtC(ca[0]) + ' ; ' + fmtC(ca[1]) + '</span></div><div class="cb">' +
+      '<div class="xr"><span class="k">Taşı</span><div class="inp c3"><input id="tDX" class="ax-x" placeholder="ΔX"><input id="tDY" class="ax-y" placeholder="ΔY"><input id="tDZ" class="ax-z" placeholder="ΔZ"></div><button class="mini" id="tMove">Uygula</button></div>' +
+      '<div class="xr"><span class="k">Döndür</span><div class="inp"><input id="tRot" placeholder="açı (°), + saat yönü tersi"></div><button class="mini" id="tRotB">Uygula</button></div>' +
+      '<div class="xr"><span class="k">Ölçekle</span><div class="inp" style="grid-template-columns:1fr 1fr"><input id="tSc" placeholder="XY çarpanı"><input id="tScZ" class="ax-z" placeholder="Z çarpanı"></div><button class="mini" id="tScB">Uygula</button></div>' +
+      '<div class="xr"><span class="k">Ayna</span><div class="inp" style="grid-template-columns:1fr 1fr"><button class="mini" id="tMirV" title="Merkezden geçen dikey eksene göre">↔ Dikey eksen</button><button class="mini" id="tMirH" title="Merkezden geçen yatay eksene göre">↕ Yatay eksen</button></div><span></span></div>' +
+      '<div class="xr"><span class="k">Kot ata</span><div class="inp"><input id="tZ" class="ax-z" placeholder="Z değeri (düzleştir)"></div><button class="mini" id="tZB">Uygula</button></div>' +
+      '</div></div>' +
+      '<div style="margin-top:10px"><label style="color:var(--muted)">Katmanı değiştir</label><select id="pLayer"><option value="">— seçin —</option>' + layOpts + '</select></div>' +
+      '<div class="actions"><button class="mini" id="pZoom">Seçime yakınlaş</button><button class="mini" id="pColor">Renk…</button><button class="mini" id="pDel">Sil</button>' +
+      '<button class="mini" id="pSave">Seçimi DXF kaydet</button><button class="mini" id="pIso">Yalnız bu katman(lar)</button>' +
+      (ids.length === 1 ? '<button class="mini" id="pRaw">Ham DXF verisi</button>' : '') + '<button class="mini" id="pClear">Seçimi bırak</button></div>';
+    P.innerHTML = html;
+    P.querySelectorAll('.pill.sel[data-type]').forEach(el => el.onclick = () => {
+      const t = el.dataset.type; S.setSel(S.selList.filter(id => TN[E.type.a[id]] === t), 'set'); this.selChanged();
+    });
+    const sel = () => S.selList.slice(), ed = this.editor, gz = () => this.gizmo.origin();
+    const enter = (ids2, fn) => ids2.forEach(i => { const el = $(i); if (el) el.onkeydown = (e) => { if (e.key === 'Enter') fn(); e.stopPropagation(); }; });
+    const doMove = () => { const dx = num($('tDX').value) || 0, dy = num($('tDY').value) || 0, dz = num($('tDZ').value) || 0; if (dx || dy || dz) { ed.move(sel(), dx, dy, dz); this.afterXform(); } };
+    const doRot = () => { const a = num($('tRot').value); if (a) { const c2 = gz(); ed.rotate(sel(), c2[0], c2[1], a); this.afterXform(); } };
+    const doSc = () => { const k = num($('tSc').value), kz = num($('tScZ').value); const K = k > 0 ? k : 1, KZ = kz > 0 ? kz : (k > 0 ? k : 1); if (K !== 1 || KZ !== 1) { const c2 = gz(); ed.scale(sel(), c2[0], c2[1], c2[2], K, KZ); this.afterXform(); } };
+    const doZ = () => { const z = num($('tZ').value); if (isFinite(z)) { ed.flatten(sel(), z); this.afterXform(); } };
+    $('tMove').onclick = doMove; $('tRotB').onclick = doRot; $('tScB').onclick = doSc; $('tZB').onclick = doZ;
+    enter(['tDX', 'tDY', 'tDZ'], doMove); enter(['tRot'], doRot); enter(['tSc', 'tScZ'], doSc); enter(['tZ'], doZ);
+    $('tMirV').onclick = () => { const c2 = gz(); ed.xform(sel(), ed.mirrorT(c2[0], c2[1], c2[0], c2[1] + 1), 'mirror', S.selList.length + ' nesne aynalandı'); this.afterXform(); };
+    $('tMirH').onclick = () => { const c2 = gz(); ed.xform(sel(), ed.mirrorT(c2[0], c2[1], c2[0] + 1, c2[1]), 'mirror', S.selList.length + ' nesne aynalandı'); this.afterXform(); };
+    $('pLayer').onchange = (e) => { if (e.target.value !== '') this.editor.layer(S.selList.slice(), +e.target.value); };
+    $('pZoom').onclick = () => this.zoomSel();
+    $('pColor').onclick = () => this.colorDialog();
+    $('pDel').onclick = () => this.deleteSel();
+    $('pSave').onclick = () => Export.saveDXF(this, 'subset', S.selList.slice());
+    $('pIso').onclick = () => { const Ls = new Set(S.selList.map(id => E.layer.a[id])); this.setLayerVis(i => Ls.has(i)); this.toast(Ls.size + ' katman gösteriliyor'); };
+    $('pClear').onclick = () => { S.clearSel(); this.selChanged(); };
+    if ($('pRaw')) $('pRaw').onclick = () => this.showRaw(ids[0]);
+  }
+  afterXform() { this.gizmo.invalidate(); this.selChanged(); }
+  async showRaw(id) {
+    const S = this.store, E = S.E;
+    if (E.flags.a[id] & F_NEW) {
+      const inf = S.newInfo.get(id);
+      this.modal('<h2>Yeni nesne</h2><pre class="raw">' + esc(JSON.stringify(inf.def || { kopyaKaynagi: inf.src }, null, 2)) + '</pre><div class="btns"><button class="btn pri" id="mOk">Kapat</button></div>', d => d.querySelector('#mOk').onclick = () => this.closeModal());
+      return;
+    }
+    const fs = E.fs.a[id], fe = Math.min(E.fe.a[id], fs + 200000);
+    const buf = await S.file.slice(fs, fe).arrayBuffer();
+    let txt;
+    if (S.info.binary) txt = '(İkili DXF — ham veri metin olarak gösterilemez; ' + (fe - fs) + ' bayt)';
+    else { txt = new TextDecoder(S.info.encoding).decode(buf); const L = txt.split(/\r?\n/); const out = []; for (let i = 0; i + 1 < L.length; i += 2) out.push(L[i].padStart(4) + '  ' + L[i + 1]); txt = out.join('\n'); }
+    this.modal('<h2>Ham DXF verisi <span style="color:var(--muted);font-size:12px">bayt ' + fmtN(fs) + '–' + fmtN(E.fe.a[id]) + '</span></h2><pre class="raw">' + esc(txt) + '</pre><div class="btns"><button class="btn pri" id="mOk">Kapat</button></div>',
+      d => d.querySelector('#mOk').onclick = () => this.closeModal());
+  }
+
+  // ───────────── seçim / düzenleme yardımcıları
+  selChanged() { this.gizmo.invalidate(); this.R.hl.dirty = true; this.R.request(); this.renderProps(); this.updateButtons(); }
+  onEdited() { this.gizmo.invalidate(); this.renderLayers(); this.renderProps(); this.updateButtons(); this.updateDoc(); }
+  ready() { if (!this.store.done) { this.toast('Dosya henüz okunuyor, lütfen bekleyin.'); return false; } return true; }
+  deleteSel() { if (!this.ready()) return; const ids = this.store.selList.slice(); if (!ids.length) { this.toast('Silinecek nesne seçili değil.'); return; } this.editor.remove(ids); this.selChanged(); }
+  zoomSel() {
+    const S = this.store, E = S.E; if (!S.selList.length) return;
+    const bb = [Infinity, Infinity, -Infinity, -Infinity], zr = [Infinity, -Infinity];
+    for (const id of S.selList) {
+      const b = E.bb.a; bb[0] = Math.min(bb[0], b[4 * id]); bb[1] = Math.min(bb[1], b[4 * id + 1]); bb[2] = Math.max(bb[2], b[4 * id + 2]); bb[3] = Math.max(bb[3], b[4 * id + 3]);
+      zr[0] = Math.min(zr[0], E.zr.a[2 * id]); zr[1] = Math.max(zr[1], E.zr.a[2 * id + 1]);
+    }
+    this.zoomBox(bb, zr);
+  }
+  zoomBox(bb, zr) {
+    const w = bb[2] - bb[0], h = bb[3] - bb[1], m = Math.max(w, h, 1) * 0.15;
+    this.R.fit([bb[0] - m, bb[1] - m, bb[2] + m, bb[3] + m], 0, zr); this.userMoved = true;
+  }
+  colorDialog() {
+    if (!this.ready()) return;
+    const S = this.store; if (!S.selList.length) { this.toast('Önce nesne seçin.'); return; }
+    let cells = '';
+    for (let i = 1; i < 256; i++) cells += '<i data-aci="' + i + '" title="ACI ' + i + '" style="background:' + this.R.colorCss(this.core.ACI[i]) + '"></i>';
+    this.modal('<h2>Renk seç (' + fmtN(S.selList.length) + ' nesne)</h2><div class="opts"><button class="btn" data-aci="256">Katmana göre (ByLayer)</button><button class="btn" data-aci="7">Beyaz/Siyah (7)</button></div><div class="aci">' + cells + '</div><div class="btns"><button class="btn" id="mNo">Vazgeç</button></div>', d => {
+      d.querySelectorAll('[data-aci]').forEach(el => el.onclick = () => { this.closeModal(); this.editor.color(S.selList.slice(), +el.dataset.aci); });
+      d.querySelector('#mNo').onclick = () => this.closeModal();
+    });
+  }
+  updateButtons() {
+    const S = this.store, done = !!S.file && S.done, sel = S.selList.length > 0;
+    const need = { done, sel: done && sel, info: !!S.info, surf: S.surfaces.length > 0 };
+    document.querySelectorAll('[data-need]').forEach(b => b.disabled = !need[b.dataset.need]);
+    $('bUndo').disabled = !this.editor.undoStack.length; $('bRedo').disabled = !this.editor.redoStack.length;
+    const gb = $('gzBar'), show = this.gizmo.enabled && sel && done && this.toolName === 'select';
+    gb.classList.toggle('show', !!(sel && done && this.toolName === 'select'));
+    gb.querySelectorAll('[data-gizmo]').forEach(b => b.classList.toggle('on', b.dataset.gizmo === 'off' ? !this.gizmo.enabled : (this.gizmo.enabled && b.dataset.gizmo === this.gizmo.mode)));
+    if (!show) this.gizmo.hover = null;
+  }
+
+  // ───────────── 3B görünüm
+  focus() {
+    const S = this.store, ext = S.ext;
+    let bb = this.R.viewBox();
+    if (ext) bb = [Math.max(bb[0], ext[0]), Math.max(bb[1], ext[1]), Math.min(bb[2], ext[2]), Math.min(bb[3], ext[3])];
+    if (!(bb[0] < bb[2] && bb[1] < bb[3])) bb = (S.view0 || ext || [-50, -50, 50, 50]).slice();
+    const zr = S.done ? S.zRange(bb) : S.zview;
+    return { bb, zr };
+  }
+  setView(az, el, bb, zr) {
+    const R = this.R;
+    if (!bb) { const f = this.focus(); bb = f.bb; zr = f.zr; }
+    if (R.is2D) R.cz = (zr[0] + zr[1]) / 2;
+    const p = R.fitParams(bb, zr, 0.04, az, el);
+    this.userMoved = true;
+    R.animateTo({ az, el, cx: p.cx, cy: p.cy, cz: p.cz, scale: p.scale }, 450, () => this.viewChanged());
+    this.vcLoop();
+  }
+  setNamedView(k) { const v = VIEWS[k]; if (v) { this.setView(v[0], v[1]); this.toast(v[2] + ' görünüm'); } }
+  homeView() { const S = this.store; this.setView(-135, ISO, (S.view0 || S.ext || [-50, -50, 50, 50]).slice(), S.zview); }
+  vcLoop() { const f = () => { this.vc.draw(); if (this.R.anim) requestAnimationFrame(f); }; requestAnimationFrame(f); }
+  beginOrbit() {
+    const R = this.R;
+    if (R.anim) { cancelAnimationFrame(R.anim); R.anim = null; }
+    if (R.is2D) { const f = this.focus(); R.cz = (f.zr[0] + f.zr[1]) / 2; }
+    this.snapPt = null;
+  }
+  orbitBy(dx, dy) { this.R.orbit(-dx * 0.4, dy * 0.4); this.userMoved = true; this.vc.draw(); }
+  endOrbit() { this.viewChanged(); }
+  togglePersp() {
+    const R = this.R;
+    if (!R.persp && R.is2D) { const f = this.focus(); R.cz = (f.zr[0] + f.zr[1]) / 2; }
+    R.persp = !R.persp; R.request();
+    this.viewChanged(); this.toast(R.persp ? 'Perspektif izdüşüm' : 'Paralel izdüşüm');
+  }
+  setZScale(v) {
+    const R = this.R; if (!(v > 0)) return;
+    R.zs = v; R.request(); this.update3DUI();
+    this.toast('Düşey abartma: ' + v + '×' + (R.is2D ? ' (3B görünümde etkili)' : ''));
+  }
+  toggleZColor() {
+    const R = this.R, S = this.store;
+    R.zcolor = !R.zcolor;
+    if (R.zcolor && S.done) R.zcr = S.zRange(this.focus().bb);
+    R.request(); this.update3DUI();
+    if (R.zcolor && !S.has3D) this.toast('Bu çizimde kot (Z) bilgisi yok; tüm nesneler aynı renkte görünür.', 4000);
+  }
+  setStyle(s) {
+    this.R.style = s; this.R.request(); this.update3DUI();
+    const S = this.store;
+    if (s !== 'wire' && !S.nTri && !S.surfaces.length) this.toast('Bu çizimde yüzey (3DFACE, kafes, kalınlık) yok. Haritalar için "Arazi yüzeyi" ile noktalardan yüzey oluşturabilirsiniz.', 6000);
+  }
+  setBlockFlat(on, say) {
+    this.R.blockFlat = this.store.flatBlocks = !!on; this.R.request(); this.update3DUI();
+    if (say) this.toast(on ? 'Blok sembolleri ekleme kotunda düz çiziliyor' : 'Blok sembolleri dosyadaki iç kotlarıyla çiziliyor');
+  }
+  viewChanged() {
+    if (!this.R.is2D && PLAN_TOOLS.has(this.toolName)) this.setTool('select');
+    this.snapPt = null; this.update3DUI(); this.updatePrompt(); this.R.request();
+  }
+  update3DUI() {
+    const R = this.R;
+    document.querySelectorAll('[data-view]').forEach(b => { const v = VIEWS[b.dataset.view]; b.classList.toggle('on', Math.abs(R.az - v[0]) < 0.01 && Math.abs(R.el - v[1]) < 0.01); });
+    document.querySelectorAll('[data-zs]').forEach(b => b.classList.toggle('on', +b.dataset.zs === R.zs));
+    document.querySelectorAll('[data-style]').forEach(b => b.classList.toggle('on', b.dataset.style === R.style));
+    $('o3Persp').classList.toggle('on', R.persp); $('o3ZCol').classList.toggle('on', R.zcolor); $('o3Flat').classList.toggle('on', R.blockFlat);
+    const lg = $('zlegend');
+    if (R.zcolor) { lg.style.display = 'block'; $('zlMin').textContent = fmtC(R.zcr[0]); $('zlMax').textContent = fmtC(R.zcr[1]); }
+    else lg.style.display = 'none';
+    const st = { wire: '', hidden: ' · gizli çizgi', shaded: ' · gölgeli' }[R.style];
+    $('viewName').textContent = (R.is2D ? 'Plan' : (Object.values(VIEWS).find(v => Math.abs(R.az - v[0]) < 0.01 && Math.abs(R.el - v[1]) < 0.01) || [0, 0, '3B'])[2]) + (R.persp ? ' · perspektif' : '') + st;
+    this.vc.draw();
+  }
+
+  // ───────────── arazi yüzeyi (TIN)
+  surfaceDialog() {
+    if (!this.ready()) return;
+    const S = this.store, E = S.E, f = this.focus(), zr = f.zr, pad = Math.max(1, (zr[1] - zr[0]) * 0.03);
+    // katman önerisi: eş yükselti / kot / nokta katmanları ve nokta içeren katmanlar
+    const ptLayers = new Set(); for (let id = 0; id < S.nEnt; id++) if (E.flags.a[id] & F_POINTS) ptLayers.add(E.layer.a[id]);
+    const re = /(EGR|E[ĞG]R[İI]|KOT|NOKTA|POINT|CONTOUR|(^|[_\s-])TOPO|ARAZ|ESYUK|EŞYÜK|SPOT|ELEV)/i;
+    const vis = S.layers.map((L, i) => i).filter(i => S.layerVis[i] && (S.layers[i].count || 0) > 0);
+    let pre = new Set(vis.filter(i => re.test(S.layers[i].name)));
+    if (!pre.size) pre = new Set(vis.filter(i => ptLayers.has(i)));
+    if (!pre.size) pre = new Set(vis);
+    const rows = vis.sort((a, b) => S.layers[a].name.localeCompare(S.layers[b].name, 'tr', { numeric: true }))
+      .map(i => '<label style="display:flex;gap:6px;margin:0;padding:2px 4px;color:var(--text)"><input type="checkbox" data-li="' + i + '"' + (pre.has(i) ? ' checked' : '') + '>' + esc(S.layers[i].name) + ' <span style="color:var(--muted);margin-left:auto">' + fmtN(S.layers[i].count) + '</span></label>').join('');
+    this.modal('<h2>Arazi yüzeyi (TIN) oluştur</h2><div style="color:var(--muted);max-width:520px;font-size:12px">Seçili katmanlardaki noktalar ve çizgi köşeleri (eş yükselti eğrileri, kotlu noktalar, 3B polyline\'lar) Delaunay yöntemiyle üçgenlenir. Şev sembolleri, yapı ve yazı gibi kotu güvenilmez katmanları dahil etmeyin.</div>' +
+      '<label>Kaynak katmanlar <span style="font-size:11px">(öneri: eş yükselti, kot ve nokta katmanları)</span></label>' +
+      '<div style="display:flex;gap:4px;margin-bottom:4px"><button class="mini" id="sAll">Hepsi</button><button class="mini" id="sNone">Hiçbiri</button><button class="mini" id="sSug">Öneri</button></div>' +
+      '<div id="sLays" style="max-height:180px;overflow:auto;border:1px solid var(--line2);border-radius:7px;padding:4px">' + rows + '</div>' +
+      '<label>Alan</label><div class="opts"><label><input type="radio" name="sreg" value="view" checked> Ekrandaki alan</label><label><input type="radio" name="sreg" value="all"> Tüm çizim</label></div>' +
+      '<label>Kot aralığı (dışındaki köşeler yok sayılır — aykırı 0 kotlarını eler)</label><div style="display:grid;grid-template-columns:1fr 1fr;gap:6px"><input type="text" id="sZ0" value="' + (zr[0] - pad).toFixed(2) + '"><input type="text" id="sZ1" value="' + (zr[1] + pad).toFixed(2) + '"></div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px"><div><label>En fazla nokta</label><input type="text" id="sMax" value="1000000"></div>' +
+      '<div><label>En uzun kenar</label><input type="text" id="sEdge" placeholder="otomatik"></div>' +
+      '<div><label>En dik eğim (%)</label><input type="text" id="sSlope" value="400" title="Bundan dik üçgenler atılır (hatalı kotlu noktaların oluşturduğu uçurumlar). Boş: filtre yok"></div></div>' +
+      '<div class="btns"><button class="btn" id="mNo">Vazgeç</button><button class="btn pri" id="mOk">Oluştur</button></div>', d => {
+      const boxes = () => [...d.querySelectorAll('[data-li]')];
+      d.querySelector('#sAll').onclick = () => boxes().forEach(b => b.checked = true);
+      d.querySelector('#sNone').onclick = () => boxes().forEach(b => b.checked = false);
+      d.querySelector('#sSug').onclick = () => boxes().forEach(b => b.checked = pre.has(+b.dataset.li));
+      d.querySelector('#mNo').onclick = () => this.closeModal();
+      d.querySelector('#mOk').onclick = () => {
+        const reg = d.querySelector('input[name=sreg]:checked').value;
+        const layers = new Set(boxes().filter(b => b.checked).map(b => +b.dataset.li));
+        if (!layers.size) { this.toast('En az bir katman seçin.'); return; }
+        const opt = { bb: reg === 'view' ? f.bb : (S.view0 || S.ext), layers, z0: num(d.querySelector('#sZ0').value), z1: num(d.querySelector('#sZ1').value),
+          max: Math.max(1000, num(d.querySelector('#sMax').value) || 1e6), edge: num(d.querySelector('#sEdge').value), slope: num(d.querySelector('#sSlope').value) };
+        this.closeModal();
+        this.buildSurface(opt).catch(e => { this.busy(null); this.alert('Yüzey oluşturulamadı: ' + e.message); });
+      };
+    });
+  }
+  // dialogdaki önerinin aynısı (kod içinden çağrı ve test için)
+  surfaceLayers() {
+    const S = this.store, E = S.E, ptLayers = new Set();
+    for (let id = 0; id < S.nEnt; id++) if (E.flags.a[id] & F_POINTS) ptLayers.add(E.layer.a[id]);
+    const re = /(EGR|E[ĞG]R[İI]|KOT|NOKTA|POINT|CONTOUR|(^|[_\s-])TOPO|ARAZ|ESYUK|EŞYÜK|SPOT|ELEV)/i;
+    const vis = S.layers.map((L, i) => i).filter(i => S.layerVis[i] && (S.layers[i].count || 0) > 0);
+    let pre = new Set(vis.filter(i => re.test(S.layers[i].name)));
+    if (!pre.size) pre = new Set(vis.filter(i => ptLayers.has(i)));
+    return pre.size ? pre : new Set(vis);
+  }
+  async buildSurface(opt) {
+    const S = this.store, t0 = performance.now(), bb = opt.bb, z0 = isFinite(opt.z0) ? opt.z0 : -Infinity, z1 = isFinite(opt.z1) ? opt.z1 : Infinity;
+    this.busy('Arazi yüzeyi: noktalar toplanıyor…'); await this.yieldUI();
+    const w = bb[2] - bb[0], h = bb[3] - bb[1];
+    const cell = Math.max(1e-6, Math.sqrt(w * h / opt.max) * 0.75), nx = Math.ceil(w / cell) + 1;
+    const seen = new Map(), X = [], Y = [], Z = [];
+    const add = (x, y, z) => {
+      if (x < bb[0] || x > bb[2] || y < bb[1] || y > bb[3] || !(z >= z0 && z <= z1)) return;
+      const k = Math.floor((y - bb[1]) / cell) * nx + Math.floor((x - bb[0]) / cell);
+      if (seen.has(k)) return; seen.set(k, 1); X.push(x); Y.push(y); Z.push(z);
+    };
+    const vis = opt.layers ? new Uint8Array(65536) : S.layerVis;
+    if (opt.layers) for (const i of opt.layers) vis[i] = 1;
+    for (const ch of S.chunks) {
+      if (!ch) continue;
+      for (let v = 0; v < ch.nV; v++) { const c = ch.col[v]; if ((c >>> 24) === 0 || !vis[ch.lay[v]]) continue; add(ch.pos[2 * v], ch.pos[2 * v + 1], ch.z[v]); }
+      for (let v = 0; v < ch.nP; v++) { const c = ch.pcol[v]; if ((c >>> 24) === 0 || !vis[ch.play[v]]) continue; add(ch.ppos[2 * v], ch.ppos[2 * v + 1], ch.pz[v]); }
+    }
+    if (X.length < 3) { this.busy(null); this.alert('Bu alanda ve kot aralığında yeterli nokta yok (' + X.length + ').'); return; }
+    this.busy('Üçgenleniyor: ' + fmtN(X.length) + ' nokta…'); await this.yieldUI();
+    const coords = new Float64Array(2 * X.length);
+    for (let i = 0; i < X.length; i++) { coords[2 * i] = X[i]; coords[2 * i + 1] = Y[i]; }
+    const T = Geom.delaunay(coords);
+    // kenar sınırı: otomatik = kenar uzunluklarının ortancasının 8 katı
+    let maxE = opt.edge;
+    if (!(maxE > 0)) {
+      const smp = []; const st = Math.max(3, Math.floor(T.length / 30000 / 3) * 3);
+      for (let k = 0; k < T.length; k += st) { const a = T[k], b = T[k + 1]; smp.push(Math.hypot(X[a] - X[b], Y[a] - Y[b])); }
+      smp.sort((u, v) => u - v); maxE = (smp[smp.length >> 1] || 1) * 8;
+    }
+    const m2 = maxE * maxE, keep = [], slope = opt.slope > 0 ? opt.slope / 100 : Infinity;
+    let steep = 0;
+    for (let k = 0; k < T.length; k += 3) {
+      const a = T[k], b = T[k + 1], c = T[k + 2];
+      const ab = (X[a] - X[b]) ** 2 + (Y[a] - Y[b]) ** 2, bc = (X[b] - X[c]) ** 2 + (Y[b] - Y[c]) ** 2, ca = (X[c] - X[a]) ** 2 + (Y[c] - Y[a]) ** 2;
+      if (!(ab <= m2 && bc <= m2 && ca <= m2)) continue;
+      if (slope < Infinity) {
+        // üçgen düzleminin en büyük eğimi: |∇z|
+        const x1 = X[b] - X[a], y1 = Y[b] - Y[a], z1 = Z[b] - Z[a], x2 = X[c] - X[a], y2 = Y[c] - Y[a], z2 = Z[c] - Z[a];
+        const nz = x1 * y2 - y1 * x2; if (Math.abs(nz) < 1e-12) { steep++; continue; }
+        const gx = (z1 * y2 - y1 * z2) / nz, gy = (x1 * z2 - z1 * x2) / nz;
+        if (Math.hypot(gx, gy) > slope) { steep++; continue; }
+      }
+      keep.push(k);
+    }
+    const n = keep.length * 3, pos = new Float32Array(2 * n), zz = new Float32Array(n);
+    let j = 0, zb0 = Infinity, zb1 = -Infinity;
+    for (const k of keep) for (let q = 0; q < 3; q++) { const i = T[k + q]; pos[2 * j] = X[i]; pos[2 * j + 1] = Y[i]; zz[j] = Z[i]; j++; if (Z[i] < zb0) zb0 = Z[i]; if (Z[i] > zb1) zb1 = Z[i]; }
+    const s = { name: 'Yüzey ' + (S.surfaces.length + 1), pos, z: zz, n, bb: bb.slice(), zb: [zb0, zb1], color: [0.66, 0.70, 0.58], visible: true, gl: null };
+    S.surfaces.push(s);
+    if (this.R.style === 'wire') this.R.style = 'shaded';
+    this.busy(null); this.R.request(); this.update3DUI(); this.renderProps(); this.updateButtons();
+    this.toast(s.name + ': ' + fmtN(keep.length) + ' üçgen, ' + fmtN(X.length) + ' nokta, ' + ((performance.now() - t0) / 1000).toFixed(1) + ' sn' + (steep ? ' · ' + fmtN(steep) + ' aşırı dik üçgen atıldı' : '') + ' · gölgeli görünüme geçildi', 7000);
+    s.steep = steep;
+  }
+  async surfaceToDXF() {
+    const S = this.store, s = S.surfaces.find(q => q.visible) || S.surfaces[0]; if (!s) return;
+    const o = S.info.origin, f = (v) => v.toFixed(4);
+    this.busy('Yüzey DXF\'e yazılıyor… (' + fmtN(s.n / 3) + ' üçgen)'); await this.yieldUI();
+    const parts = ['  0\nSECTION\n  2\nHEADER\n  9\n$ACADVER\n  1\nAC1009\n  0\nENDSEC\n  0\nSECTION\n  2\nTABLES\n  0\nTABLE\n  2\nLAYER\n 70\n1\n  0\nLAYER\n  2\nARAZI_TIN\n 70\n0\n 62\n3\n  6\nCONTINUOUS\n  0\nENDTAB\n  0\nENDSEC\n  0\nSECTION\n  2\nENTITIES\n'];
+    let buf = '';
+    for (let i = 0; i < s.n; i += 3) {
+      const P = [0, 1, 2, 2].map(k => [f(s.pos[2 * (i + k)] + o[0]), f(s.pos[2 * (i + k) + 1] + o[1]), f(s.z[i + k])]);
+      buf += '  0\n3DFACE\n  8\nARAZI_TIN\n';
+      for (let k = 0; k < 4; k++) buf += ' 1' + k + '\n' + P[k][0] + '\n 2' + k + '\n' + P[k][1] + '\n 3' + k + '\n' + P[k][2] + '\n';
+      if (buf.length > 4e6) { parts.push(buf); buf = ''; }
+    }
+    parts.push(buf + '  0\nENDSEC\n  0\nEOF\n');
+    const blob = new Blob(parts, { type: 'application/dxf' });
+    this.busy(null);
+    const ok = await Export.saveBlob(this, blob, Export.baseName(this) + '_arazi_yuzeyi.dxf', 'DXF çizimi', 'application/dxf', 'dxf');
+    if (ok) this.toast('Arazi yüzeyi kaydedildi (' + fmtMB(blob.size) + ', ' + fmtN(s.n / 3) + ' 3DFACE)', 5000);
+  }
+
+  // ───────────── koordinat dönüşümleri / yakalama
+  abs(x, y) { const o = this.store.info ? this.store.info.origin : [0, 0]; return [x + o[0], y + o[1]]; }
+  rel(x, y) { const o = this.store.info ? this.store.info.origin : [0, 0]; return [x - o[0], y - o[1]]; }
+  // İmlecin dünya noktası (yakalama + orto uygulanmış); yakalanan noktada Z de döner
+  point(base) {
+    let p = [this.mouse.wx, this.mouse.wy];
+    if (this.snapPt) p = this.snapPt.p.slice();
+    else if (this.ortho && base) { if (Math.abs(p[0] - base[0]) > Math.abs(p[1] - base[1])) p[1] = base[1]; else p[0] = base[0]; }
+    return p;
+  }
+  updateSnap() {
+    this.snapPt = null;
+    const t = this.tool;
+    if (!this.snapOn || !t || !t.wantsPoints || !this.store.grid || !this.R.is2D) return;
+    this.snapPt = this.store.snap(this.mouse.wx, this.mouse.wy, 10 / this.R.scale, this.snapModes);
+  }
+  // "x,y[,z]" mutlak · "@dx,dy" göreli · "@uzunluk<açı" · tek sayı: imleç yönünde uzunluk
+  parsePoint(s, base) {
+    s = s.trim().replace(/\s+/g, '');
+    let m;
+    if ((m = s.match(/^@(-?[\d.]+)<(-?[\d.]+)$/)) && base) { const L = +m[1], a = +m[2] * Math.PI / 180; return [base[0] + L * Math.cos(a), base[1] + L * Math.sin(a)]; }
+    if ((m = s.match(/^@(-?[\d.]+)[,;](-?[\d.]+)$/)) && base) return [base[0] + +m[1], base[1] + +m[2]];
+    if ((m = s.match(/^(-?[\d.]+)[,;](-?[\d.]+)(?:[,;](-?[\d.]+))?$/))) { const p = this.rel(+m[1], +m[2]); if (m[3] !== undefined) p.push(+m[3]); return p; }
+    if ((m = s.match(/^(-?[\d.]+)$/)) && base) {
+      const L = +m[1]; const [cx, cy] = this.point(base); const a = Math.atan2(cy - base[1], cx - base[0]);
+      return [base[0] + L * Math.cos(a), base[1] + L * Math.sin(a)];
+    }
+    return null;
+  }
+  // Seçimi bekleyen araçlar
+  needSel(name) {
+    if (!this.store.selList.length) { this.pendingTool = name; this.toast('Önce nesneleri seçin; sonra Enter veya sağ tık ile devam edin.', 4000); return false; }
+    return true;
+  }
+  newDef(type, props) { return Object.assign({ type, li: this.curLayer }, props); }
+  // tek nesnelik çizim araçları (AutoCAD gibi) bitince seçime döner
+  done1() { if (this.toolName !== 'select') this.setTool('select'); }
+
+  // ───────────── araçlar
+  initTools() {
+    const app = this, S = this.store, R = this.R;
+    const A = (p) => app.abs(p[0], p[1]);                 // göreli → mutlak
+    const Z = (p) => p[2] !== undefined ? p[2] : 0;
+    const strokePts = (ctx, P, closed, color, dash) => {
+      if (P.length < 2) return;
+      ctx.strokeStyle = color || '#4c9aff'; if (dash) ctx.setLineDash(dash);
+      ctx.beginPath(); P.forEach((q, i) => { const s = R.w2s(q[0], q[1]); i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]); }); if (closed) ctx.closePath(); ctx.stroke(); ctx.setLineDash([]);
+    };
+    const label = (ctx, txt, p) => { const s = R.w2s(p[0], p[1]); ctx.font = '12px Segoe UI, sans-serif'; ctx.fillStyle = '#ffd166'; ctx.textAlign = 'center'; ctx.fillText(txt, s[0], s[1] - 8); };
+    const circ = (c, r, n) => { const P = []; for (let i = 0; i <= (n || 72); i++) { const a = i / (n || 72) * 2 * Math.PI; P.push([c[0] + r * Math.cos(a), c[1] + r * Math.sin(a)]); } return P; };
+    const pickEnt = (p) => S.grid ? S.pick(p[0], p[1], 8 / R.scale) : -1;
+    const selTool = (name, mk) => Object.assign({ wantsPoints: true, start() { if (!app.ready() || !app.needSel(app.toolName)) return false; if (this.init) this.init(); } }, mk);
+
+    this.tools = {
+      select: {
+        prompt: () => app.pendingTool ? 'Nesneleri seçin, bitince Enter / sağ tık' : (R.is2D ? 'Seç: tıklayın · soldan sağa pencere: tamamen içindekiler · sağdan sola: kesişenler · Shift: ekle/çıkar · komut yazabilirsiniz (L, TR, M…)'
+          : '3B: tıklayarak / pencereyle seçin · Shift + orta tuş: yörünge · orta tuş: kaydır · tekerlek: yakınlaş'),
+        down(p, e) { this.drag = { sx: e.offsetX, sy: e.offsetY, w: [app.mouse.wx, app.mouse.wy], shift: e.shiftKey, box: false }; },
+        move(e) { const d = this.drag; if (d && Math.hypot(e.offsetX - d.sx, e.offsetY - d.sy) > 4) { d.box = true; R.request(); } },
+        up(e) {
+          const d = this.drag; this.drag = null; if (!d || !S.grid) return;
+          const win = e.offsetX > d.sx;
+          if (!R.is2D) {
+            const cam = R.cam(), t0 = performance.now();
+            if (d.box) S.setSel(S.boxSelectScreen(Math.min(d.sx, e.offsetX), Math.min(d.sy, e.offsetY), Math.max(d.sx, e.offsetX), Math.max(d.sy, e.offsetY), win, cam), d.shift ? 'add' : 'set');
+            else { const id = S.pickScreen(e.offsetX, e.offsetY, 6, cam); if (id >= 0) S.setSel([id], d.shift ? 'toggle' : 'set'); else if (!d.shift) S.clearSel(); }
+            app.lastPickMs = performance.now() - t0;
+          } else if (d.box) {
+            const [x0, y0] = d.w, [x1, y1] = [app.mouse.wx, app.mouse.wy];
+            S.setSel(S.boxSelect(Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1), win), d.shift ? 'add' : 'set');
+          } else {
+            const id = S.pick(app.mouse.wx, app.mouse.wy, 6 / R.scale);
+            if (id >= 0) S.setSel([id], d.shift ? 'toggle' : 'set'); else if (!d.shift) S.clearSel();
+          }
+          app.selChanged();
+        },
+        enter() { if (app.pendingTool && S.selList.length) { const t = app.pendingTool; app.pendingTool = null; app.setTool(t); return true; } return false; },
+        preview(ctx) {
+          const d = this.drag; if (!d || !d.box) return;
+          const x = Math.min(d.sx, app.mouse.sx), y = Math.min(d.sy, app.mouse.sy), w = Math.abs(app.mouse.sx - d.sx), h = Math.abs(app.mouse.sy - d.sy);
+          const win = app.mouse.sx > d.sx;
+          ctx.fillStyle = win ? 'rgba(76,154,255,.12)' : 'rgba(63,185,80,.12)'; ctx.fillRect(x, y, w, h);
+          ctx.strokeStyle = win ? '#4c9aff' : '#3fb950'; ctx.setLineDash(win ? [] : [6, 4]); ctx.strokeRect(x + .5, y + .5, w, h); ctx.setLineDash([]);
+        }
+      },
+      pan: { prompt: () => 'Kaydır: sol tuşla sürükleyin', down(p, e) { app.startPan(e); } },
+      orbit: {
+        prompt: () => '3B yörünge: sol tuşla sürükleyin (her araçta: Shift + orta tuş) · ViewCube: hazır görünümler · Esc: bitir',
+        down(p, e) { app.beginOrbit(); this.drag = { x: e.offsetX, y: e.offsetY }; },
+        move(e) { const d = this.drag; if (d) { app.orbitBy(e.offsetX - d.x, e.offsetY - d.y); d.x = e.offsetX; d.y = e.offsetY; } },
+        up() { if (this.drag) { this.drag = null; app.endOrbit(); } }
+      },
+      zoomwin: {
+        prompt: () => 'Yakınlaştırmak için pencere çizin (tıklama: 2×) · E: sığdır',
+        down(p, e) { this.drag = { sx: e.offsetX, sy: e.offsetY }; },
+        up(e) {
+          const d = this.drag; this.drag = null; if (!d) return;
+          if (Math.hypot(e.offsetX - d.sx, e.offsetY - d.sy) < 5) R.zoomAt(e.offsetX, e.offsetY, 2);
+          else R.zoomRect(d.sx, d.sy, e.offsetX, e.offsetY);
+          app.userMoved = true;
+        },
+        input(s) { if (/^e$/i.test(s.trim())) { app.fit(); app.setTool('select'); return true; } return false; },
+        preview(ctx) { const d = this.drag; if (!d) return; ctx.strokeStyle = '#4c9aff'; ctx.strokeRect(Math.min(d.sx, app.mouse.sx) + .5, Math.min(d.sy, app.mouse.sy) + .5, Math.abs(app.mouse.sx - d.sx), Math.abs(app.mouse.sy - d.sy)); }
+      },
+
+      // ── çizim
+      line: {
+        wantsPoints: true, base: null,
+        prompt() { return this.base ? 'Sonraki nokta (x,y · @dx,dy · uzunluk) — Enter/Esc: bitir' : 'Çizgi: ilk nokta (tıklayın veya x,y yazın)'; },
+        start() { this.base = null; },
+        click(p) {
+          if (!app.ready()) return;
+          if (this.base) { const a = A(this.base), b = A(p); app.editor.create(app.newDef('LINE', { x1: a[0], y1: a[1], z1: Z(this.base), x2: b[0], y2: b[1], z2: Z(p) })); }
+          this.base = p;
+        },
+        input(s) { const p = app.parsePoint(s, this.base); if (!p) return false; this.click(p); return true; },
+        preview(ctx) { if (this.base) { app.rubber(ctx, this.base, app.point(this.base)); const c = app.point(this.base); label(ctx, fmtC(Math.hypot(c[0] - this.base[0], c[1] - this.base[1])), [(c[0] + this.base[0]) / 2, (c[1] + this.base[1]) / 2]); } }
+      },
+      pline: {
+        wantsPoints: true, pts: [],
+        prompt() { return this.pts.length ? 'Sonraki nokta — Enter/sağ tık: bitir · K: kapat · Geri tuşu: son noktayı sil' : 'Polyline: ilk nokta'; },
+        start() { this.pts = []; },
+        click(p) { this.pts.push(p); },
+        finish(closed, quiet) {
+          const made = this.pts.length >= 2 && app.ready();
+          if (made) {
+            const a = this.pts.map(A);
+            app.editor.create(app.newDef('LWPOLYLINE', { xs: a.map(q => q[0]), ys: a.map(q => q[1]), closed: !!closed && this.pts.length > 2, elev: Z(this.pts[0]) }));
+          }
+          this.pts = [];
+          if (!quiet) app.done1();
+        },
+        enter() { this.finish(false); return true; }, right() { this.finish(false); return true; },
+        dbl() { this.pts.pop(); this.finish(false); }, undoPt() { this.pts.pop(); },
+        input(s) { if (/^[kKcC]$/.test(s.trim())) { this.finish(true); return true; } const p = app.parsePoint(s, this.pts[this.pts.length - 1]); if (!p) return false; this.click(p); return true; },
+        cancel() { this.finish(false, true); },
+        preview(ctx) { const P = this.pts; if (!P.length) return; strokePts(ctx, P.concat([app.point(P[P.length - 1])])); }
+      },
+      spline: {
+        wantsPoints: true, pts: [],
+        prompt() { return this.pts.length ? 'Sonraki denetim noktası — Enter/sağ tık: bitir' : 'Spline: ilk denetim noktası'; },
+        start() { this.pts = []; },
+        click(p) { this.pts.push(p); },
+        finish(quiet) {
+          if (this.pts.length >= 2 && app.ready()) { const a = this.pts.map(A); app.editor.create(app.newDef('SPLINE', { xs: a.map(q => q[0]), ys: a.map(q => q[1]), zs: this.pts.map(Z), deg: 3 })); }
+          this.pts = [];
+          if (!quiet) app.done1();
+        },
+        enter() { this.finish(); return true; }, right() { this.finish(); return true; }, undoPt() { this.pts.pop(); },
+        input(s) { const p = app.parsePoint(s, this.pts[this.pts.length - 1]); if (!p) return false; this.click(p); return true; },
+        cancel() { this.finish(true); },
+        preview(ctx) {
+          const P = this.pts.concat(this.pts.length ? [app.point(this.pts[this.pts.length - 1])] : []); if (P.length < 2) return;
+          strokePts(ctx, P, false, 'rgba(76,154,255,.45)', [4, 4]);
+          const n = P.length, deg = Math.min(3, n - 1), kn = []; for (let i = 0; i <= deg; i++) kn.push(0); for (let i = 1; i < n - deg; i++) kn.push(i); for (let i = 0; i <= deg; i++) kn.push(n - deg);
+          const out = []; if (app.core.evalSpline(deg, P.map(q => q[0]), P.map(q => q[1]), null, kn, 100, out)) { const C = []; for (let i = 0; i < out.length; i += 2) C.push([out[i], out[i + 1]]); strokePts(ctx, C); }
+        }
+      },
+      rect: {
+        wantsPoints: true, a: null,
+        prompt() { return this.a ? 'Karşı köşe (veya @genişlik,yükseklik)' : 'Dikdörtgen: ilk köşe'; },
+        start() { this.a = null; },
+        corners(a, b) { return [[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]]; },
+        click(p) {
+          if (!this.a) { this.a = p; return; }
+          if (app.ready() && p[0] !== this.a[0] && p[1] !== this.a[1]) { const C = this.corners(this.a, p).map(A); app.editor.create(app.newDef('LWPOLYLINE', { xs: C.map(q => q[0]), ys: C.map(q => q[1]), closed: true, elev: Z(this.a) })); }
+          this.a = null; app.done1();
+        },
+        input(s) { const p = app.parsePoint(s, this.a); if (!p) return false; this.click(p); return true; },
+        preview(ctx) { if (this.a) { const b = app.point(this.a); strokePts(ctx, this.corners(this.a, b), true); label(ctx, fmtC(Math.abs(b[0] - this.a[0])) + ' × ' + fmtC(Math.abs(b[1] - this.a[1])), b); } }
+      },
+      polygon: {
+        wantsPoints: true, c: null,
+        prompt() { return this.c ? 'Köşe noktası (çevrel yarıçap) — ya da yarıçap yazın' : 'Çokgen (' + app.polySides + ' kenar): merkez noktası · kenar sayısı için sayı yazın'; },
+        start() { this.c = null; },
+        verts(c, p) { const n = app.polySides, r = Math.hypot(p[0] - c[0], p[1] - c[1]), a0 = Math.atan2(p[1] - c[1], p[0] - c[0]), V = []; for (let i = 0; i < n; i++) { const a = a0 + i * 2 * Math.PI / n; V.push([c[0] + r * Math.cos(a), c[1] + r * Math.sin(a)]); } return V; },
+        click(p) {
+          if (!this.c) { this.c = p; return; }
+          if (app.ready() && Math.hypot(p[0] - this.c[0], p[1] - this.c[1]) > 0) { const V = this.verts(this.c, p).map(A); app.editor.create(app.newDef('LWPOLYLINE', { xs: V.map(q => q[0]), ys: V.map(q => q[1]), closed: true, elev: Z(this.c) })); }
+          this.c = null; app.done1();
+        },
+        input(s) {
+          const v = num(s);
+          if (!this.c && Number.isInteger(v) && v >= 3 && v <= 1024 && !/[,;@]/.test(s)) { app.polySides = v; return true; }
+          if (this.c && v > 0 && !/[,;@]/.test(s)) { this.click([this.c[0] + v, this.c[1]]); return true; }
+          const p = app.parsePoint(s, this.c); if (!p) return false; this.click(p); return true;
+        },
+        preview(ctx) { if (this.c) strokePts(ctx, this.verts(this.c, app.point(this.c)), true); }
+      },
+      circle: {
+        wantsPoints: true, c: null,
+        prompt() { return this.c ? 'Yarıçap (tıklayın veya sayı yazın)' : 'Daire: merkez noktası'; },
+        start() { this.c = null; },
+        click(p) { if (!this.c) { this.c = p; return; } this.make(Math.hypot(p[0] - this.c[0], p[1] - this.c[1])); },
+        make(r) { if (r > 0 && app.ready()) { const a = A(this.c); app.editor.create(app.newDef('CIRCLE', { cx: a[0], cy: a[1], cz: Z(this.c), r })); } this.c = null; app.done1(); },
+        input(s) { if (this.c && /^[\d.,]+$/.test(s.trim())) { this.make(num(s)); return true; } const p = app.parsePoint(s, this.c); if (!p) return false; this.click(p); return true; },
+        preview(ctx) { if (!this.c) return; const p = app.point(this.c), r = Math.hypot(p[0] - this.c[0], p[1] - this.c[1]); strokePts(ctx, circ(this.c, r)); app.rubber(ctx, this.c, p); label(ctx, 'R ' + fmtC(r), p); }
+      },
+      circle3: {
+        wantsPoints: true, P: [],
+        prompt() { return 'Daire (3 nokta): ' + (this.P.length + 1) + '. nokta'; },
+        start() { this.P = []; },
+        cc(a, b, c) {
+          const d = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1])); if (Math.abs(d) < 1e-12) return null;
+          const a2 = a[0] * a[0] + a[1] * a[1], b2 = b[0] * b[0] + b[1] * b[1], c2 = c[0] * c[0] + c[1] * c[1];
+          const ux = (a2 * (b[1] - c[1]) + b2 * (c[1] - a[1]) + c2 * (a[1] - b[1])) / d, uy = (a2 * (c[0] - b[0]) + b2 * (a[0] - c[0]) + c2 * (b[0] - a[0])) / d;
+          return [ux, uy, Math.hypot(a[0] - ux, a[1] - uy)];
+        },
+        click(p) {
+          this.P.push(p); if (this.P.length < 3) return;
+          const c = this.cc(...this.P); this.P = [];
+          if (!c) { app.toast('Noktalar doğrusal'); return; }
+          if (app.ready()) { const a = A(c); app.editor.create(app.newDef('CIRCLE', { cx: a[0], cy: a[1], cz: Z(p), r: c[2] })); }
+          app.done1();
+        },
+        input(s) { const p = app.parsePoint(s, this.P[this.P.length - 1]); if (!p) return false; this.click(p); return true; },
+        preview(ctx) { if (this.P.length === 2) { const c = this.cc(this.P[0], this.P[1], app.point()); if (c) strokePts(ctx, circ(c, c[2])); } else if (this.P.length === 1) app.rubber(ctx, this.P[0], app.point(this.P[0])); }
+      },
+      arc: {
+        wantsPoints: true, P: [],
+        prompt() { return ['Yay: başlangıç noktası', 'Yay: ikinci nokta (yay üzerinde)', 'Yay: bitiş noktası'][this.P.length]; },
+        start() { this.P = []; },
+        def(a, b, c) {
+          const k = app.tools.circle3.cc(a, b, c); if (!k) return null;
+          const ang = (p) => Math.atan2(p[1] - k[1], p[0] - k[0]) * 180 / Math.PI;
+          const n = (x) => ((x % 360) + 360) % 360;
+          let a0 = n(ang(a)), a1 = n(ang(c)), am = n(ang(b));
+          const inSweep = n(am - a0) < n(a1 - a0);
+          if (!inSweep) { const t = a0; a0 = a1; a1 = t; }
+          return { cx: k[0], cy: k[1], r: k[2], a0, a1 };
+        },
+        click(p) {
+          this.P.push(p); if (this.P.length < 3) return;
+          const d = this.def(...this.P), z = Z(this.P[0]); this.P = [];
+          if (!d) { app.toast('Noktalar doğrusal'); return; }
+          if (app.ready()) { const a = A([d.cx, d.cy]); app.editor.create(app.newDef('ARC', { cx: a[0], cy: a[1], cz: z, r: d.r, a0: d.a0, a1: d.a1 })); }
+          app.done1();
+        },
+        input(s) { const p = app.parsePoint(s, this.P[this.P.length - 1]); if (!p) return false; this.click(p); return true; },
+        preview(ctx) {
+          if (this.P.length === 1) app.rubber(ctx, this.P[0], app.point(this.P[0]));
+          if (this.P.length === 2) {
+            const d = this.def(this.P[0], this.P[1], app.point()); if (!d) return;
+            const Pp = []; let sw = ((d.a1 - d.a0) % 360 + 360) % 360; for (let i = 0; i <= 64; i++) { const a = (d.a0 + sw * i / 64) * Math.PI / 180; Pp.push([d.cx + d.r * Math.cos(a), d.cy + d.r * Math.sin(a)]); }
+            strokePts(ctx, Pp);
+          }
+        }
+      },
+      ellipse: {
+        wantsPoints: true, P: [],
+        prompt() { return ['Elips: merkez', 'Elips: birinci eksen ucu', 'Elips: diğer eksen uzunluğu (tıklayın veya sayı)'][this.P.length]; },
+        start() { this.P = []; },
+        def(c, a, d) {
+          let mx = a[0] - c[0], my = a[1] - c[1]; const L = Math.hypot(mx, my); if (L < 1e-12 || !(d > 0)) return null;
+          let ratio = d / L;
+          if (ratio > 1) { const nx = -my / L * d, ny = mx / L * d; mx = nx; my = ny; ratio = 1 / ratio; }
+          return { mx, my, ratio };
+        },
+        other(p) { const c = this.P[0], a = this.P[1], ux = (a[0] - c[0]), uy = (a[1] - c[1]), L = Math.hypot(ux, uy); return Math.abs((p[0] - c[0]) * (-uy / L) + (p[1] - c[1]) * (ux / L)); },
+        make(d) {
+          const e = this.def(this.P[0], this.P[1], d), c = this.P[0]; this.P = [];
+          if (e && app.ready()) { const a = A(c); app.editor.create(app.newDef('ELLIPSE', { cx: a[0], cy: a[1], cz: Z(c), mx: e.mx, my: e.my, ratio: e.ratio, t0: 0, t1: 2 * Math.PI })); }
+          app.done1();
+        },
+        click(p) { if (this.P.length < 2) { this.P.push(p); return; } this.make(this.other(p)); },
+        input(s) { if (this.P.length === 2 && /^[\d.,]+$/.test(s.trim())) { this.make(num(s)); return true; } const p = app.parsePoint(s, this.P[this.P.length - 1]); if (!p) return false; this.click(p); return true; },
+        preview(ctx) {
+          if (this.P.length === 1) app.rubber(ctx, this.P[0], app.point(this.P[0]));
+          if (this.P.length === 2) {
+            const e = this.def(this.P[0], this.P[1], this.other(app.point())); if (!e) return; const c = this.P[0], nx = -e.my * e.ratio, ny = e.mx * e.ratio, Pp = [];
+            for (let i = 0; i <= 72; i++) { const a = i / 72 * 2 * Math.PI; Pp.push([c[0] + e.mx * Math.cos(a) + nx * Math.sin(a), c[1] + e.my * Math.cos(a) + ny * Math.sin(a)]); }
+            strokePts(ctx, Pp);
+          }
+        }
+      },
+      point: {
+        wantsPoints: true,
+        prompt: () => 'Nokta: konum (tıklayın veya x,y[,z] yazın) — Esc: bitir',
+        click(p) { if (app.ready()) { const a = A(p); app.editor.create(app.newDef('POINT', { x: a[0], y: a[1], z: Z(p) })); } },
+        input(s) { const p = app.parsePoint(s, null); if (!p) return false; this.click(p); return true; }
+      },
+      text: {
+        wantsPoints: true,
+        prompt: () => 'Metin: yerleşim noktasını tıklayın',
+        click(p) { if (app.ready()) app.textDialog(p); }
+      },
+
+      // ── değiştirme
+      move: selTool('move', {
+        base: null, copy: false,
+        prompt() { return this.base ? 'Hedef nokta (veya @dx,dy) — Esc: iptal' : (this.copy ? 'Kopyala' : 'Taşı') + ': temel nokta (veya doğrudan dx,dy yazın)'; },
+        init() { this.base = null; R.offset = [0, 0]; },
+        click(p) {
+          if (!this.base) { this.base = p; return; }
+          const dz = (p[2] !== undefined && this.base[2] !== undefined) ? p[2] - this.base[2] : 0;
+          this.apply(p[0] - this.base[0], p[1] - this.base[1], dz);
+          if (!this.copy) app.setTool('select');
+        },
+        apply(dx, dy, dz) {
+          R.offset = [0, 0];
+          if (this.copy) { const ids = app.editor.copy(S.selList.slice(), 0, 0, [1, 0, 0, 1, dx, dy, 1, dz || 0]); app.toast(ids.length + ' nesne kopyalandı (Esc ile bitirin)'); }
+          else app.editor.move(S.selList.slice(), dx, dy, dz);
+          app.afterXform();
+        },
+        move() { if (this.base) { const p = app.point(this.base); R.offset = [p[0] - this.base[0], p[1] - this.base[1]]; } },
+        input(s) {
+          let m;
+          if (!this.base && (m = s.trim().match(/^(-?[\d.]+)[,;](-?[\d.]+)(?:[,;](-?[\d.]+))?$/))) { this.apply(+m[1], +m[2], +(m[3] || 0)); if (!this.copy) app.setTool('select'); return true; }
+          const p = app.parsePoint(s, this.base); if (!p) return false; this.click(p); return true;
+        },
+        cancel() { R.offset = [0, 0]; },
+        preview(ctx) { if (this.base) app.rubber(ctx, this.base, app.point(this.base)); }
+      }),
+      rotate: selTool('rotate', {
+        base: null, copy: false,
+        prompt() { return this.base ? 'Dönüş açısı (tıklayın veya derece yazın; K: ' + (this.copy ? 'kopya kapalı' : 'kopyalayarak') + ')' : 'Döndür: taban noktası'; },
+        init() { this.base = null; this.copy = false; R.xf = [1, 0, 0, 1, 0, 0, 1, 0]; },
+        ang(p) { return Math.atan2(p[1] - this.base[1], p[0] - this.base[0]) * 180 / Math.PI; },
+        apply(deg) {
+          R.xf = [1, 0, 0, 1, 0, 0, 1, 0];
+          const T = app.editor.rotT(this.base[0], this.base[1], deg);
+          if (this.copy) app.editor.copy(S.selList.slice(), 0, 0, T); else app.editor.xform(S.selList.slice(), T, 'rotate', S.selList.length + ' nesne ' + (+deg.toFixed(4)) + '° döndürüldü');
+          app.afterXform(); app.setTool('select');
+        },
+        click(p) { if (!this.base) { this.base = p; return; } this.apply(this.ang(p)); },
+        move() { if (this.base) R.xf = app.editor.rotT(this.base[0], this.base[1], this.ang(app.point(this.base))); },
+        input(s) {
+          if (/^[kKcC]$/.test(s.trim())) { this.copy = !this.copy; return true; }
+          if (this.base && /^-?[\d.,]+$/.test(s.trim())) { this.apply(num(s)); return true; }
+          const p = app.parsePoint(s, this.base); if (!p) return false; this.click(p); return true;
+        },
+        cancel() { R.xf = [1, 0, 0, 1, 0, 0, 1, 0]; },
+        preview(ctx) { if (this.base) { const p = app.point(this.base); app.rubber(ctx, this.base, p); label(ctx, this.ang(p).toFixed(2) + '°', p); } }
+      }),
+      scale: selTool('scale', {
+        base: null, ref: null, refLen: 0,
+        prompt() { return !this.base ? 'Ölçekle: taban noktası' : this.ref === 'p1' ? 'Referans uzunluğu: ilk nokta' : this.ref === 'p2' ? 'Referans uzunluğu: ikinci nokta' : this.refLen ? 'Yeni uzunluk (tıklayın veya yazın)' : 'Ölçek çarpanı (yazın ya da tıklayın: uzaklık = çarpan) · R: referans'; },
+        init() { this.base = null; this.ref = null; this.refLen = 0; R.xf = [1, 0, 0, 1, 0, 0, 1, 0]; },
+        k(p) { const d = Math.hypot(p[0] - this.base[0], p[1] - this.base[1]); return this.refLen ? d / this.refLen : d; },
+        apply(k) {
+          R.xf = [1, 0, 0, 1, 0, 0, 1, 0]; if (!(k > 0)) return;
+          app.editor.scale(S.selList.slice(), this.base[0], this.base[1], this.base[2] || 0, k, k); app.afterXform(); app.setTool('select');
+        },
+        click(p) {
+          if (!this.base) { this.base = p; return; }
+          if (this.ref === 'p1') { this.r1 = p; this.ref = 'p2'; return; }
+          if (this.ref === 'p2') { this.refLen = Math.hypot(p[0] - this.r1[0], p[1] - this.r1[1]); this.ref = null; return; }
+          this.apply(this.k(p));
+        },
+        move() { if (this.base && !this.ref) { const k = this.k(app.point(this.base)); if (k > 0) R.xf = app.editor.scaleT(this.base[0], this.base[1], 0, k, 1); } },
+        input(s) {
+          if (this.base && /^[rR]$/.test(s.trim())) { this.ref = 'p1'; return true; }
+          if (this.base && !this.ref && /^[\d.,]+$/.test(s.trim())) { const v = num(s); this.apply(this.refLen ? v / this.refLen : v); return true; }
+          const p = app.parsePoint(s, this.base); if (!p) return false; this.click(p); return true;
+        },
+        cancel() { R.xf = [1, 0, 0, 1, 0, 0, 1, 0]; },
+        preview(ctx) { if (this.base && !this.ref) { const p = app.point(this.base); app.rubber(ctx, this.base, p); label(ctx, '× ' + this.k(p).toFixed(4), p); } }
+      }),
+      mirror: selTool('mirror', {
+        a: null, b: null,
+        prompt() { return !this.a ? 'Ayna: eksenin ilk noktası' : !this.b ? 'Ayna: eksenin ikinci noktası' : 'Kaynak nesneler silinsin mi? [E: evet / H: hayır] <H>'; },
+        init() { this.a = null; this.b = null; R.xf = [1, 0, 0, 1, 0, 0, 1, 0]; },
+        click(p) { if (!this.a) { this.a = p; return; } if (!this.b && Math.hypot(p[0] - this.a[0], p[1] - this.a[1]) > 0) { this.b = p; R.xf = app.editor.mirrorT(this.a[0], this.a[1], p[0], p[1]); } },
+        finish(del) {
+          const T = app.editor.mirrorT(this.a[0], this.a[1], this.b[0], this.b[1]); R.xf = [1, 0, 0, 1, 0, 0, 1, 0];
+          if (del) app.editor.xform(S.selList.slice(), T, 'mirror', S.selList.length + ' nesne aynalandı'); else app.editor.copy(S.selList.slice(), 0, 0, T);
+          app.afterXform(); app.setTool('select');
+        },
+        enter() { if (this.b) { this.finish(false); return true; } return false; }, right() { return this.enter(); },
+        input(s) {
+          const t = s.trim().toLocaleLowerCase('tr');
+          if (this.b && /^(e|evet|y|yes)$/.test(t)) { this.finish(true); return true; }
+          if (this.b && /^(h|hayır|n|no)$/.test(t)) { this.finish(false); return true; }
+          const p = app.parsePoint(s, this.a); if (!p) return false; this.click(p); return true;
+        },
+        move() { if (this.a && !this.b) { const p = app.point(this.a); if (Math.hypot(p[0] - this.a[0], p[1] - this.a[1]) > 0) R.xf = app.editor.mirrorT(this.a[0], this.a[1], p[0], p[1]); } },
+        cancel() { R.xf = [1, 0, 0, 1, 0, 0, 1, 0]; },
+        preview(ctx) { if (this.a) { const p = this.b || app.point(this.a); app.rubber(ctx, this.a, p); } }
+      }),
+      offset: {
+        wantsPoints: true, src: -1, def: null,
+        prompt() { return this.src < 0 ? 'Öteleme (' + fmtC(app.offsetDist) + app.unit() + '): ötelenecek nesneyi seçin · uzaklık için sayı yazın' : 'Hangi tarafa? (tıklayın)'; },
+        start() { this.src = -1; this.def = null; if (!app.ready()) return false; },
+        async click(p) {
+          if (this.src < 0) {
+            const id = pickEnt(p); if (id < 0) return;
+            const d = await app.getDef(id);
+            if (!d || !Geom.prims(d)) { app.toast('Bu nesne ötelenemez (çizgi, yay, daire ve polyline desteklenir).'); return; }
+            this.src = id; this.def = d; S.setSel([id], 'set'); app.selChanged(); app.updatePrompt(); return;
+          }
+          const r = Geom.offset(this.def, app.offsetDist, A(p));
+          if (r.err) app.toast(r.err); else { app.editor.add(r.defs, 'Öteleme (' + fmtC(app.offsetDist) + ')'); }
+          this.src = -1; this.def = null; S.clearSel(); app.selChanged(); app.updatePrompt();
+        },
+        input(s) { const v = num(s); if (v > 0 && !/[,;@]/.test(s)) { app.offsetDist = v; return true; } return false; },
+        preview(ctx) {
+          if (this.src >= 0 && this.def) { const r = Geom.offset(this.def, app.offsetDist, A(app.point())); if (r.defs) for (const d of r.defs) app.drawDef(ctx, d, 'rgba(255,209,102,.9)'); }
+        }
+      },
+      trim: {
+        wantsPoints: true,
+        prompt: () => 'Buda: budanacak parçaya tıklayın (tüm görünür nesneler kesici kenardır) — Esc: bitir',
+        start() { if (!app.ready()) return false; },
+        click(p) { app.modifyAt('trim', p); }
+      },
+      extend: {
+        wantsPoints: true,
+        prompt: () => 'Uzat: uzatılacak ucun yakınına tıklayın (ekranda görünen nesneler sınırdır) — Esc: bitir',
+        start() { if (!app.ready()) return false; },
+        click(p) { app.modifyAt('extend', p); }
+      },
+      fillet: {
+        wantsPoints: true, first: null, mode: 'fillet',
+        prompt() { const v = this.mode === 'fillet' ? 'R = ' + fmtC(app.filletR) : 'uzaklık = ' + fmtC(app.chamferD); return (this.first ? 'İkinci çizgi' : (this.mode === 'fillet' ? 'Kavis' : 'Pah') + ' (' + v + '): ilk çizgi') + ' · değer için sayı yazın'; },
+        start() { this.first = null; if (!app.ready()) return false; },
+        async click(p) {
+          const id = pickEnt(p); if (id < 0) return;
+          const d = await app.getDef(id);
+          if (!d || d.type !== 'LINE') { app.toast('Kavis/pah çizgiler (LINE) arasında çalışır.'); return; }
+          if (!this.first) { this.first = { id, d, p: A(p) }; S.setSel([id], 'set'); app.selChanged(); app.updatePrompt(); return; }
+          if (id === this.first.id) return;
+          const r = Geom.corner(this.first.d, this.first.p, d, A(p), this.mode, this.mode === 'fillet' ? app.filletR : app.chamferD);
+          if (r.err) app.toast(r.err); else app.editor.replace([this.first.id, id], r.defs, this.mode === 'fillet' ? 'Kavis' : 'Pah');
+          this.first = null; S.clearSel(); app.selChanged(); app.updatePrompt();
+        },
+        input(s) { const v = num(s); if (v >= 0 && !/[,;@]/.test(s)) { if (this.mode === 'fillet') app.filletR = v; else app.chamferD = v; return true; } return false; }
+      },
+      break: {
+        wantsPoints: true,
+        prompt: () => 'Böl: nesneyi bölünecek noktadan tıklayın (yakalama ile tam nokta) — Esc: bitir',
+        start() { if (!app.ready()) return false; },
+        click(p) { app.modifyAt('break', p); }
+      },
+
+      // ── ölçüm
+      measure: {
+        wantsPoints: true, a: null, last: null,
+        prompt() { return this.a ? 'İkinci nokta' : 'Ölç: ilk nokta (kotlu noktaya yakalarsanız ΔZ ve eğim de hesaplanır)' + (this.last ? '  ·  Son ölçüm: ' + this.last : ''); },
+        start() { this.a = null; },
+        click(p) {
+          if (!this.a) { this.a = p; this.b = null; return; }
+          const dx = p[0] - this.a[0], dy = p[1] - this.a[1], hd = Math.hypot(dx, dy), u = app.unit();
+          let s = 'Mesafe ' + fmtC(hd) + u + '  ΔX ' + fmtC(dx) + '  ΔY ' + fmtC(dy) + '  Açı ' + (Math.atan2(dy, dx) * 180 / Math.PI).toFixed(2) + '°';
+          if (p[2] !== undefined && this.a[2] !== undefined) {
+            const dz = p[2] - this.a[2];
+            s += '  ·  ΔZ ' + fmtC(dz) + '  Eğik ' + fmtC(Math.hypot(hd, dz)) + u + '  Eğim %' + (hd > 0 ? (dz / hd * 100).toFixed(2) : '—');
+          }
+          this.last = s;
+          this.b = p; this.done = [this.a, p]; this.a = null; app.toast(this.last, 8000);
+        },
+        input(s) { const p = app.parsePoint(s, this.a); if (!p) return false; this.click(p); return true; },
+        preview(ctx) {
+          const seg = this.a ? [this.a, app.point(this.a)] : this.done;
+          if (!seg) return;
+          app.rubber(ctx, seg[0], seg[1]);
+          const d = Math.hypot(seg[1][0] - seg[0][0], seg[1][1] - seg[0][1]);
+          let lbl = fmtC(d);
+          if (seg[0][2] !== undefined && seg[1][2] !== undefined) lbl += '  ΔZ ' + fmtC(seg[1][2] - seg[0][2]);
+          label(ctx, lbl, [(seg[0][0] + seg[1][0]) / 2, (seg[0][1] + seg[1][1]) / 2]);
+        }
+      },
+      area: {
+        wantsPoints: true, pts: [], last: null, done: null,
+        prompt() {
+          if (!this.pts.length) return 'Alan: köşeleri sırayla tıklayın, Enter / sağ tık: bitir' + (this.last ? '  ·  Son: ' + this.last : '');
+          const r = this.calc(this.pts.concat([app.point(this.pts[this.pts.length - 1])]));
+          return 'Sonraki köşe — Enter/sağ tık: bitir · Geri: son köşeyi sil  ·  Alan ' + fmtC(r.A) + '  Çevre ' + fmtC(r.L);
+        },
+        start() { this.pts = []; this.done = null; },
+        click(p) { this.pts.push(p); this.done = null; },
+        calc(P) {
+          let Ar = 0, L = 0;
+          for (let i = 0; i < P.length; i++) { const a = P[i], b = P[(i + 1) % P.length]; Ar += a[0] * b[1] - b[0] * a[1]; L += Math.hypot(b[0] - a[0], b[1] - a[1]); }
+          return { A: Math.abs(Ar) / 2, L };
+        },
+        finish() {
+          if (this.pts.length >= 3) {
+            const r = this.calc(this.pts), u = app.unit();
+            this.last = 'Alan ' + fmtC(r.A) + (u ? u + '²' : '') + '  Çevre ' + fmtC(r.L) + u;
+            app.toast(this.last, 8000); this.done = this.pts.slice();
+          }
+          this.pts = [];
+        },
+        enter() { this.finish(); return true; }, right() { this.finish(); return true; }, undoPt() { this.pts.pop(); },
+        input(s) { const p = app.parsePoint(s, this.pts[this.pts.length - 1]); if (!p) return false; this.click(p); return true; },
+        cancel() { this.pts = []; this.done = null; },
+        preview(ctx) {
+          const P = this.pts.length ? this.pts.concat([app.point(this.pts[this.pts.length - 1])]) : this.done;
+          if (!P || P.length < 2) return;
+          ctx.beginPath(); P.forEach((q, i) => { const [x, y] = R.w2s(q[0], q[1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.closePath();
+          ctx.fillStyle = 'rgba(255,209,102,.18)'; ctx.fill(); ctx.strokeStyle = '#ffd166'; ctx.stroke();
+          if (P.length >= 3) {
+            let cx = 0, cy = 0; for (const q of P) { cx += q[0]; cy += q[1]; }
+            label(ctx, fmtC(this.calc(P).A) + (app.unit() ? app.unit() + '²' : ''), [cx / P.length, cy / P.length]);
+          }
+        }
+      }
+    };
+    this.tools.copy = Object.assign(Object.create(this.tools.move), { copy: true, base: null });
+    this.tools.chamfer = Object.assign(Object.create(this.tools.fillet), { mode: 'chamfer', first: null });
+  }
+  setTool(name) {
+    const t = this.tools[name]; if (!t) return;
+    if (PLAN_TOOLS.has(name) && !this.R.is2D) {
+      this.toast('Bu araç plan (üst) görünümde çalışır. ViewCube\'da ÜST\'e tıklayın ya da "plan" yazın.', 4500);
+      if (this.toolName) return; name = 'select';
+    }
+    if (this.tool && this.tool.cancel) this.tool.cancel();
+    this.gizmo.cancel();
+    this.tool = this.tools[name]; this.toolName = name;
+    if (PLAN_TOOLS.has(name) && name !== 'measure' && name !== 'area') { if (!this.store.done && this.store.file) { this.toast('Dosya okunurken düzenleme yapılamaz.'); return this.setTool('select'); } }
+    if (this.tool.start && this.tool.start() === false) { this.tool = this.tools.select; this.toolName = 'select'; }
+    if (this.toolName !== 'select') this.pendingTool = null;
+    document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === this.toolName));
+    // çizim bölünmüş düğmesi son kullanılan aracı gösterir
+    if (DRAW_TOOLS.indexOf(this.toolName) >= 0) {
+      const mb = $('drawMain'), it = document.querySelector('#ddDraw .mi[data-tool="' + this.toolName + '"]');
+      mb.dataset.tool = this.toolName; mb.classList.add('on');
+      mb.innerHTML = '<svg class="i"><use href="#i-' + TOOL_ICON[this.toolName] + '"/></svg><span>' + esc(it ? it.querySelector('.lbl').textContent.split(' (')[0] : this.toolName) + '</span>';
+    }
+    $('ov').style.cursor = this.toolName === 'pan' ? 'grab' : this.toolName === 'orbit' ? 'move' : 'crosshair';
+    if (this.toolName !== 'select' && !['pan', 'zoomwin', 'orbit'].includes(this.toolName)) this.lastCmd = this.toolName;
+    this.updatePrompt(); this.updateButtons(); this.R.request();
+  }
+  updatePrompt() { const t = this.tool; this.prompt(t ? (typeof t.prompt === 'function' ? t.prompt() : t.prompt) : ''); }
+  rubber(ctx, a, b) {
+    const [x1, y1] = this.R.w2s(a[0], a[1]), [x2, y2] = this.R.w2s(b[0], b[1]);
+    ctx.strokeStyle = '#4c9aff'; ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); ctx.setLineDash([]);
+  }
+  // tanımı (mutlak) ekrana çiz (önizleme)
+  drawDef(ctx, d, color) {
+    const R = this.R, G = Geom.prims(d); if (!G) return;
+    ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.beginPath();
+    for (const p of G.P) { const n = p.k === 'L' ? 1 : 48; for (let i = 0; i <= n; i++) { const q = Geom.at(p, i / n), r = this.rel(q[0], q[1]), s = R.w2s(r[0], r[1]); i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]); } }
+    ctx.stroke(); ctx.lineWidth = 1;
+  }
+
+  // ───────────── değiştirme işlemleri (budama, uzatma, bölme)
+  // Varlığın tam geometri tanımı (mutlak WCS): dosyadan okunur, düzenlemeler uygulanır
+  async getDef(id) {
+    const S = this.store, E = S.E, core = this.core, inf = S.newInfo.get(id);
+    const { toEd } = Export.editState(this);
+    let text;
+    if (inf && inf.def) {
+      const d = JSON.parse(JSON.stringify(inf.def)); if (d.li !== undefined && d.layer === undefined) d.layer = S.layers[d.li].name;
+      text = core.genEntity(d, { eol: '\n', version: 'AC1015', owner: '', alloc: () => '1' });
+    } else {
+      if (S.info.binary) return null;
+      const src = inf && inf.src !== undefined ? inf.src : id;
+      text = new TextDecoder(S.info.encoding).decode(await S.file.slice(E.fs.a[src], E.fe.a[src]).arrayBuffer());
+    }
+    const d = core.parseDef(core.patchEntity(text, toEd(S.edits.get(id) || {}), '\n'));
+    if (d && d.unsupported) return null;
+    return d;
+  }
+  // Kutudaki görünür nesnelerin çizgi parçaları (mutlak) — kesici / sınır kenarlar
+  edgeSegs(bb, exclude) {
+    const S = this.store, E = S.E, fl = E.flags.a, o = S.info.origin, out = [];
+    const inb = (x1, y1, x2, y2) => !((x1 < bb[0] && x2 < bb[0]) || (x1 > bb[2] && x2 > bb[2]) || (y1 < bb[1] && y2 < bb[1]) || (y1 > bb[3] && y2 > bb[3]));
+    S.grid.query(bb[0], bb[1], bb[2], bb[3], (id) => {
+      if (id === exclude || (fl[id] & F_DEL) || (fl[id] & F_POINTS) || !S.layerVis[E.layer.a[id]]) return;
+      const b = E.bb.a; if (b[4 * id + 2] < bb[0] || b[4 * id] > bb[2] || b[4 * id + 3] < bb[1] || b[4 * id + 1] > bb[3]) return;
+      const ch = S.chunks[E.chunk.a[id]], vs = E.vs.a[id], vc = E.vc.a[id];
+      if (ch && vc) for (let v = vs; v < vs + vc; v += 2) {
+        const x1 = ch.pos[2 * v], y1 = ch.pos[2 * v + 1], x2 = ch.pos[2 * v + 2], y2 = ch.pos[2 * v + 3];
+        if (inb(x1, y1, x2, y2)) out.push({ x1: x1 + o[0], y1: y1 + o[1], x2: x2 + o[0], y2: y2 + o[1], id });
+      }
+      for (let k = E.is.a[id]; k < E.is.a[id] + E.ic.a[id]; k++) {
+        const B = S.blocks[S.IN.blk.a[k]]; if (!B || !B.pos || B.nV > 20000) continue;
+        const f = B.f.a, oo = S.IN.slot.a[k] * 8, P = B.pos;
+        for (let v = 0; v < B.nV; v += 2) {
+          const X = (j) => f[oo] * P[2 * j] + f[oo + 1] * P[2 * j + 1] + f[oo + 2], Y = (j) => f[oo + 3] * P[2 * j] + f[oo + 4] * P[2 * j + 1] + f[oo + 5];
+          const x1 = X(v), y1 = Y(v), x2 = X(v + 1), y2 = Y(v + 1);
+          if (inb(x1, y1, x2, y2)) out.push({ x1: x1 + o[0], y1: y1 + o[1], x2: x2 + o[0], y2: y2 + o[1], id: -1 });
+        }
+      }
+    });
+    return out;
+  }
+  async modifyAt(kind, p) {
+    const S = this.store, R = this.R, id = S.pick(p[0], p[1], 8 / R.scale);
+    if (id < 0) return;
+    const def = await this.getDef(id);
+    if (!def || !Geom.prims(def)) { this.toast('Bu nesne tipi desteklenmiyor (çizgi, yay, daire ve polyline).'); return; }
+    const pa = this.abs(p[0], p[1]);
+    let bb;
+    if (kind === 'extend') bb = R.viewBox();
+    else { const b = S.E.bb.a, m = Math.max(b[4 * id + 2] - b[4 * id], b[4 * id + 3] - b[4 * id + 1]) * 0.01 + 1e-6; bb = [b[4 * id] - m, b[4 * id + 1] - m, b[4 * id + 2] + m, b[4 * id + 3] + m]; }
+    let res;
+    if (kind === 'break') res = Geom.breakAt(def, pa);
+    else {
+      const segs = this.edgeSegs(bb, id);
+      const fn = kind === 'trim' ? Geom.trim : Geom.extend;
+      // 1) yaklaşık kesişimlerle hangi kesicilerin tam geometrisi gerekiyor?  2) onlarla kesinleştir
+      const need = new Set(); fn(def, pa, segs, (cid) => { if (cid >= 0) need.add(cid); return null; });
+      const exact = new Map(); for (const cid of need) exact.set(cid, await this.getDef(cid));
+      res = fn(def, pa, segs, (cid) => exact.get(cid) || null);
+    }
+    if (res.err) { this.toast(res.err, 4000); return; }
+    if (res.del) { this.editor.replace([id], [], 'Budama (kesişim yok → silindi)'); this.toast('Kesici kenar bulunamadı; nesne silindi (Ctrl+Z ile geri alın).', 4000); }
+    else this.editor.replace([id], res.defs, kind === 'trim' ? 'Budama' : kind === 'extend' ? 'Uzatma' : 'Bölme');
+    S.clearSel(); this.selChanged();
+  }
+  async joinSel() {
+    const S = this.store; if (!this.ready()) return;
+    const ids = S.selList.slice(); if (ids.length < 2) { this.toast('Birleştirmek için en az iki nesne seçin.'); return; }
+    const defs = []; for (const id of ids) defs.push(await this.getDef(id));
+    const valid = ids.filter((id, i) => defs[i] && Geom.prims(defs[i]));
+    const vd = defs.filter(d => d && Geom.prims(d));
+    const size = Math.max(1, ...valid.map(id => { const b = S.E.bb.a; return Math.max(b[4 * id + 2] - b[4 * id], b[4 * id + 3] - b[4 * id + 1]); }));
+    const r = Geom.join(vd, size * 1e-7 + 1e-6);
+    if (r.err) { this.toast(r.err, 4000); return; }
+    // yalnızca zincire katılan nesneler değiştirilir
+    this.editor.replace(r.usedIdx.map(i => valid[i]), r.defs, 'Birleştir (' + r.used + ' nesne)');
+    this.toast(r.used + ' nesne tek polyline oldu' + (r.left ? '; ' + r.left + ' nesne uç uca değmediği için olduğu gibi kaldı.' : '.'), 5000);
+    S.clearSel(); this.selChanged();
+  }
+  async explodeSel() {
+    const S = this.store; if (!this.ready()) return;
+    const ids = S.selList.slice(); if (!ids.length) { this.toast('Patlatılacak nesneleri seçin.'); return; }
+    const olds = [], defs = []; let skipped = 0;
+    for (const id of ids) {
+      const d = await this.getDef(id); if (!d) { skipped++; continue; }
+      const r = Geom.explode(d); if (r.err) { skipped++; continue; }
+      olds.push(id); defs.push(...r.defs);
+    }
+    if (!olds.length) { this.toast('Seçimde patlatılabilir polyline yok (bloklar ve diğer tipler desteklenmiyor).', 4000); return; }
+    this.editor.replace(olds, defs, 'Patlat (' + olds.length + ' → ' + defs.length + ')');
+    this.toast(olds.length + ' polyline ' + defs.length + ' parçaya ayrıldı' + (skipped ? ' · ' + skipped + ' nesne patlatılamadı' : ''));
+    S.clearSel(); this.selChanged();
+  }
+  flattenDialog() {
+    const S = this.store; if (!this.ready()) return;
+    if (!S.selList.length) { this.toast('Önce kot atanacak nesneleri seçin.'); return; }
+    this.modal('<h2>Kot ata (düzleştir)</h2><div style="color:var(--muted);max-width:440px;font-size:12px">Seçili ' + fmtN(S.selList.length) + ' nesnenin tüm Z değerleri verilen kota eşitlenir (AutoCAD FLATTEN). Bloklarda yalnız ekleme kotu değişir.</div>' +
+      '<label>Z değeri</label><input type="text" id="fz" value="0"><div class="btns"><button class="btn" id="mNo">Vazgeç</button><button class="btn pri" id="mOk">Uygula</button></div>', d => {
+      const ok = () => { const z = num(d.querySelector('#fz').value); this.closeModal(); if (isFinite(z)) { this.editor.flatten(S.selList.slice(), z); this.afterXform(); } };
+      d.querySelector('#mOk').onclick = ok; d.querySelector('#mNo').onclick = () => this.closeModal();
+      d.querySelector('#fz').onkeydown = (e) => { if (e.key === 'Enter') ok(); };
+    });
+  }
+
+  drawPreview(ctx) {
+    if (this.tool && this.tool.preview) this.tool.preview(ctx);
+    if (this.snapPt) {
+      const [x, y] = this.R.w2s(this.snapPt.p[0], this.snapPt.p[1]), k = this.snapPt.kind;
+      ctx.strokeStyle = '#3fb950'; ctx.lineWidth = 2; ctx.beginPath();
+      if (k === 'end') ctx.rect(x - 5, y - 5, 10, 10);
+      else if (k === 'mid') { ctx.moveTo(x, y - 6); ctx.lineTo(x + 6, y + 5); ctx.lineTo(x - 6, y + 5); ctx.closePath(); }
+      else { ctx.moveTo(x - 5, y - 5); ctx.lineTo(x + 5, y - 5); ctx.lineTo(x - 5, y + 5); ctx.lineTo(x + 5, y + 5); ctx.closePath(); }
+      ctx.stroke(); ctx.lineWidth = 1;
+    }
+    if (this.marker) {
+      const m = this.marker, [x, y] = this.R.w2s(m.x, m.y, m.z);
+      if (isFinite(x)) {
+        ctx.strokeStyle = '#e5534b'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, 12, 0, 2 * Math.PI);
+        ctx.moveTo(x - 20, y); ctx.lineTo(x + 20, y); ctx.moveTo(x, y - 20); ctx.lineTo(x, y + 20); ctx.stroke(); ctx.lineWidth = 1;
+        ctx.font = '12px Segoe UI, sans-serif'; ctx.fillStyle = '#e5534b'; ctx.textAlign = 'left'; ctx.fillText(m.label, x + 16, y - 14);
+      }
+    }
+    this.gizmo.draw(ctx);
+  }
+  afterDraw() {
+    const st = this.R.lastTextStats, w = $('textwarn');
+    if (st && st.skipped) { w.style.display = 'block'; w.textContent = fmtN(st.skipped) + ' yazı bu ölçekte gösterilmiyor — yakınlaştırın'; }
+    else w.style.display = 'none';
+    const S = this.store;
+    $('infoText').textContent = S.file ? fmtN(S.nEnt) + ' nesne' + (S.selList.length ? ' · ' + fmtN(S.selList.length) + ' seçili' : '') + ' · ' : '';
+    if (!this.R.anim) this.vc.draw();
+  }
+  textDialog(p) {
+    const h0 = this.textH || +(20 / this.R.scale).toPrecision(2);
+    this.modal('<h2>Metin ekle</h2><label>Metin</label><input type="text" id="tStr" value=""><label>Yükseklik (çizim birimi)</label><input type="number" id="tH" step="any" value="' + h0 + '">' +
+      '<label>Dönüş açısı (derece)</label><input type="number" id="tR" step="any" value="0"><div class="btns"><button class="btn" id="mNo">Vazgeç</button><button class="btn pri" id="mOk">Ekle</button></div>', d => {
+      const ok = () => {
+        const str = d.querySelector('#tStr').value, h = +d.querySelector('#tH').value, r = +d.querySelector('#tR').value || 0;
+        this.closeModal();
+        if (!str || !(h > 0)) return;
+        this.textH = h;
+        const a = this.abs(p[0], p[1]);
+        this.editor.create(this.newDef('TEXT', { x: a[0], y: a[1], z: p[2] || 0, h, rot: r, str }));
+      };
+      d.querySelector('#mOk').onclick = ok; d.querySelector('#mNo').onclick = () => this.closeModal();
+      d.querySelector('#tStr').onkeydown = (e) => { if (e.key === 'Enter') ok(); };
+      setTimeout(() => { const el = d.querySelector('#tStr'); if (el) el.focus(); }, 40);
+    });
+  }
+
+  // ───────────── metin bul / koordinata git
+  findDialog() {
+    if (!this.ready()) return;
+    const S = this.store;
+    this.modal('<h2>Metin bul</h2><input type="text" id="fQ" placeholder="Aranacak metin (örn. kot, parsel no, yol adı)" value="' + esc(this.lastFind || '') + '">' +
+      '<div class="opts" style="margin-top:8px"><label><input type="checkbox" id="fWord"> Tam eşleşme</label><label><input type="checkbox" id="fHidden"> Kapalı katmanlar dahil</label></div>' +
+      '<div id="fInfo" style="color:var(--muted);margin:8px 0 4px;font-size:12px"></div><div id="fRes" class="fres"></div>' +
+      '<div class="btns"><button class="btn" id="fAll" disabled>Bulunanların hepsini seç</button><button class="btn pri" id="mNo">Kapat</button></div>', d => {
+      let hits = [];
+      const run = () => {
+        const q = d.querySelector('#fQ').value.trim().toLocaleLowerCase('tr'), whole = d.querySelector('#fWord').checked, hidden = d.querySelector('#fHidden').checked;
+        this.lastFind = d.querySelector('#fQ').value;
+        hits = [];
+        if (q) {
+          const X = S.TX, TS = S.TS, n = S.nText;
+          for (let i = 0; i < n; i++) {
+            if (X.hid.a[i] || (!hidden && !S.layerVis[X.lay.a[i]])) continue;
+            const s = TS[i].toLocaleLowerCase('tr');
+            if (whole ? s.trim() === q : s.indexOf(q) >= 0) hits.push(i);
+          }
+        }
+        d.querySelector('#fInfo').textContent = q ? fmtN(hits.length) + ' sonuç' + (hits.length > 500 ? ' (ilk 500 listeleniyor)' : '') : fmtN(S.nText) + ' yazı içinde arar';
+        d.querySelector('#fAll').disabled = !hits.length;
+        d.querySelector('#fRes').innerHTML = hits.slice(0, 500).map(i => {
+          const L = S.layers[S.TX.lay.a[i]], s = S.TS[i].replace(/\n/g, ' ');
+          return '<div class="fr" data-t="' + i + '"><span>' + esc(s.length > 70 ? s.slice(0, 70) + '…' : s) + '</span><span class="fl">' + esc(L ? L.name : '') + '</span></div>';
+        }).join('');
+      };
+      let tm = 0;
+      d.querySelector('#fQ').oninput = () => { clearTimeout(tm); tm = setTimeout(run, 150); };
+      d.querySelector('#fQ').onkeydown = (e) => { if (e.key === 'Enter' && hits.length) { this.closeModal(); this.gotoText(hits[0]); } };
+      d.querySelector('#fWord').onchange = run; d.querySelector('#fHidden').onchange = run;
+      d.querySelector('#fRes').onclick = (e) => { const r = e.target.closest('[data-t]'); if (r) { this.closeModal(); this.gotoText(+r.dataset.t); } };
+      d.querySelector('#fAll').onclick = () => {
+        const L = new Set(hits.map(t => S.TX.lay.a[t])); let opened = 0;
+        for (const l of L) if (!S.layerVis[l]) { S.layerVis[l] = 1; opened++; }
+        if (opened) { this.R.updateLayers(); this.renderLayers(); }
+        this.closeModal(); S.setSel(hits.map(t => S.TX.ent.a[t]), 'set'); this.selChanged(); this.zoomSel();
+        this.toast(fmtN(S.selList.length) + ' nesne seçildi');
+      };
+      d.querySelector('#mNo').onclick = () => this.closeModal();
+      run();
+    });
+  }
+  gotoText(t) {
+    const S = this.store, X = S.TX, id = X.ent.a[t], li = X.lay.a[t];
+    if (!S.layerVis[li]) { S.layerVis[li] = 1; this.R.updateLayers(); this.renderLayers(); this.toast('"' + S.layers[li].name + '" katmanı açıldı'); }
+    if (!S.layerVis[S.E.layer.a[id]]) { S.layerVis[S.E.layer.a[id]] = 1; this.R.updateLayers(); this.renderLayers(); }
+    const bb = [Infinity, Infinity, -Infinity, -Infinity];
+    this.core.textBBox(X.x.a[t], X.y.a[t], X.h.a[t], X.r.a[t], X.al.a[t], S.TS[t], X.wf.a[t], bb);
+    const m = Math.max(bb[2] - bb[0], bb[3] - bb[1]) * 2;
+    this.R.fit([bb[0] - m, bb[1] - m, bb[2] + m, bb[3] + m], 0, [X.z.a[t], X.z.a[t]]); this.userMoved = true;
+    S.setSel([id], 'set'); this.selChanged();
+  }
+  gotoDialog() {
+    const R = this.R, c = this.abs(R.cx, R.cy);
+    this.modal('<h2>Koordinata git</h2><label>X (sağa)</label><input type="text" id="gX" value="' + c[0].toFixed(3) + '"><label>Y (yukarı)</label><input type="text" id="gY" value="' + c[1].toFixed(3) + '">' +
+      '<label>Görüntü genişliği (çizim birimi, boş: ölçeği koru)</label><input type="text" id="gW" placeholder="örn. 100">' +
+      '<div style="color:var(--muted);font-size:12px;margin-top:8px">Komut satırına da yazabilirsiniz: <b>git 450000,4400000</b></div>' +
+      '<div class="btns"><button class="btn" id="mNo">Vazgeç</button><button class="btn pri" id="mOk">Git</button></div>', d => {
+      const ok = () => {
+        const x = num(d.querySelector('#gX').value), y = num(d.querySelector('#gY').value), w = num(d.querySelector('#gW').value || '0');
+        if (!isFinite(x) || !isFinite(y)) { this.toast('Geçersiz koordinat'); return; }
+        this.closeModal(); this.gotoXY(x, y, w > 0 ? w : 0);
+      };
+      d.querySelector('#mOk').onclick = ok; d.querySelector('#mNo').onclick = () => this.closeModal();
+      d.querySelectorAll('input').forEach(i => i.onkeydown = (e) => { if (e.key === 'Enter') ok(); });
+    });
+  }
+  gotoXY(X, Y, width) {
+    if (!this.store.info) return;
+    const R = this.R, [x, y] = this.rel(X, Y);
+    let z = R.cz;
+    if (this.store.done) { const zr = this.store.zRange([x - 50, y - 50, x + 50, y + 50]); z = (zr[0] + zr[1]) / 2; }
+    if (width > 0) R.scale = Math.min(R.W, R.H) / width;
+    R.cx = x; R.cy = y; if (!R.is2D) R.cz = z;
+    this.marker = { x, y, z, label: fmtC(X) + ' ; ' + fmtC(Y) };
+    clearTimeout(this._markT); this._markT = setTimeout(() => { this.marker = null; R.request(); }, 15000);
+    this.userMoved = true; R.request();
+    const e = this.store.ext;
+    this.toast('Konum: X ' + fmtC(X) + '  Y ' + fmtC(Y) + (e && (x < e[0] || x > e[2] || y < e[1] || y > e[3]) ? ' — çizim kapsamının dışında' : ''), 4000);
+  }
+
+  // ───────────── dışa aktarma diyalogları
+  exportDialog(kind) {
+    const titles = { svg: 'SVG olarak dışa aktar', pdf: 'PDF olarak dışa aktar', png: 'PNG olarak dışa aktar' };
+    let body = '';
+    if (kind !== 'png') body += '<label>Alan</label><div class="opts"><label><input type="radio" name="reg" value="view" checked> Ekrandaki görünüm</label><label><input type="radio" name="reg" value="all"> Tüm çizim</label></div>';
+    if (kind === 'pdf') body += '<label>Kağıt</label><select id="xSize"><option>A4</option><option selected>A3</option><option>A2</option><option>A1</option><option>A0</option></select>';
+    if (kind === 'png') body += '<label>Çözünürlük</label><div class="opts">' + [1, 2, 4, 8].map(f => '<label><input type="radio" name="fac" value="' + f + '"' + (f === 2 ? ' checked' : '') + '> ' + f + '× ekran</label>').join('') + '</div>';
+    if (kind !== 'pdf') body += '<label>Arka plan</label><div class="opts"><label><input type="radio" name="bg" value="white" checked> Beyaz</label><label><input type="radio" name="bg" value="dark"> Koyu</label></div>';
+    body += '<div style="color:var(--muted);margin-top:10px;font-size:12px;max-width:460px">Yalnızca görünür katmanlar aktarılır.' + (kind === 'png' ? ' Görüntü, ekrandaki görünümün (3B ve gölgeli dahil) ölçeklenmiş halidir.' : ' Çok büyük çizimlerde "Tüm çizim" seçeneği büyük dosya üretebilir.' + (this.R.is2D ? '' : ' <b>SVG/PDF her zaman plan (üstten) görünümle aktarılır</b>; 3B görüntü için PNG kullanın.')) + '</div>';
+    this.modal('<h2>' + titles[kind] + '</h2>' + body + '<div class="btns"><button class="btn" id="mNo">Vazgeç</button><button class="btn pri" id="mOk">Dışa aktar</button></div>', d => {
+      d.querySelector('#mNo').onclick = () => this.closeModal();
+      d.querySelector('#mOk').onclick = () => {
+        const v = (n) => { const el = d.querySelector('input[name=' + n + ']:checked'); return el ? el.value : null; };
+        const opt = { region: v('reg') || 'view', bg: v('bg') || 'white', factor: +(v('fac') || 2), size: d.querySelector('#xSize') ? d.querySelector('#xSize').value : 'A3' };
+        this.closeModal();
+        Export[kind](this, opt).catch(e => { this.busy(null); this.alert('Dışa aktarma hatası: ' + e.message); });
+      };
+    });
+  }
+  helpDialog() {
+    const groups = {};
+    for (const c of COMMANDS) (groups[c[4]] = groups[c[4]] || []).push(c);
+    const cmds = Object.entries(groups).map(([g, list]) => '<h4>' + esc(g) + '</h4><table class="help">' + list.map(c => '<tr><td><kbd>' + c[0].slice(0, 3).map(esc).join('</kbd> <kbd>') + '</kbd></td><td>' + esc(c[3]) + '</td></tr>').join('') + '</table>').join('');
+    const mouse = [['Sol tık / sürükle', 'Seç · pencere (sağa: tamamen içindeki, sola: kesişen) · Shift: ekle/çıkar'], ['Tekerlek', 'İmlecin olduğu yere yakınlaş'], ['Orta / sağ tuş sürükle', 'Kaydır'],
+      ['Shift + orta tuş', '3B yörünge'], ['Orta tuş çift tık', 'Çizime sığdır'], ['Seçim tutamacı', 'Oklar: X/Y/Z yönünde taşı · halka: döndür · kareler: ölçekle (Shift: adımlı)'],
+      ['ViewCube', 'Yüz/kenar/köşe: hazır görünüm · sürükle: döndür · ⌂: ev'], ['Enter / boşluk / sağ tık', 'Komutu bitir · boş satırda son komutu tekrarla'], ['Esc', 'İptal / seçimi bırak'],
+      ['Delete', 'Seçileni sil'], ['Ctrl+Z / Ctrl+Y', 'Geri al / yinele'], ['Ctrl+A / Ctrl+F', 'Hepsini seç / metin bul'], ['F3 / F8', 'Yakalama / orto'], ['Ctrl+O / Ctrl+S', 'Aç / kaydet']];
+    this.modal('<h2>Komutlar ve kısayollar</h2><div style="display:grid;grid-template-columns:1fr 1fr;gap:0 28px;max-width:860px"><div><h4>Fare ve klavye</h4><table class="help">' + mouse.map(r => '<tr><td><kbd>' + r[0] + '</kbd></td><td>' + r[1] + '</td></tr>').join('') + '</table>' +
+      '<h4>Değer girişi</h4><div style="color:var(--muted);font-size:12px">x,y[,z] mutlak · @dx,dy göreli · @uzunluk&lt;açı kutupsal · tek sayı: imleç yönünde uzunluk, yarıçap, açı ya da çarpan.<br>Harf yazınca komut satırına gider; AutoCAD kısaltmaları geçerlidir.</div></div><div>' + cmds + '</div></div>' +
+      '<div class="btns"><button class="btn pri" id="mOk">Kapat</button></div>', d => d.querySelector('#mOk').onclick = () => this.closeModal());
+  }
+
+  // ───────────── komutlar
+  runCommand(v) {
+    const raw = String(v).trim(), c = raw.toLocaleLowerCase('tr');
+    if (!c) return;
+    let m;
+    if ((m = c.match(/^view:(\w+)$/))) { this.setNamedView(m[1]); return; }
+    if ((m = c.match(/^style:(\w+)$/))) { this.setStyle(m[1]); return; }
+    if ((m = c.match(/^(?:git|goto)\s*(-?[\d.]+)\s*[,; ]\s*(-?[\d.]+)$/))) { this.gotoXY(+m[1], +m[2], 0); return; }
+    if ((m = c.match(/^(?:abart|zscale|zs)\s*([\d.]+)$/))) { this.setZScale(+m[1]); return; }
+    if (c === 'zoom e' || c === 'z e') { this.fit(); return; }
+    const S = this.store, cmd = ALIAS.get(c);
+    const name = cmd ? cmd[2] : c;
+    if (cmd && cmd[1] === 't') { this.setTool(name); return; }
+    this.lastCmd = name;
+    switch (name) {
+      case 'open': this.openDialog(); return;
+      case 'save': if (S.done) Export.saveDXF(this, 'full'); return;
+      case 'savesel': if (!S.selList.length) { this.toast('Önce kaydedilecek nesneleri seçin.'); return; } Export.saveDXF(this, 'subset', S.selList.slice()); return;
+      case 'saveview': {
+        if (!S.done) return;
+        let ids;
+        if (this.R.is2D) { const [x0, y0, x1, y1] = this.R.viewBox(); ids = S.boxSelect(x0, y0, x1, y1, false); }
+        else ids = S.boxSelectScreen(0, 0, this.R.W, this.R.H, false, this.R.cam());
+        if (!ids.length) { this.toast('Ekranda kaydedilecek nesne yok.'); return; }
+        this.toast(fmtN(ids.length) + ' nesne kaydediliyor…'); Export.saveDXF(this, 'subset', ids); return;
+      }
+      case 'svg': case 'pdf': case 'png': if (S.done) this.exportDialog(name); return;
+      case 'surfdxf': this.surfaceToDXF(); return;
+      case 'undo': this.editor.undo(); this.selChanged(); return;
+      case 'redo': this.editor.redo(); this.selChanged(); return;
+      case 'fit': this.fit(); return;
+      case 'home': this.homeView(); return;
+      case 'persp': this.togglePersp(); return;
+      case 'zcolor': this.toggleZColor(); return;
+      case 'flatblocks': this.setBlockFlat(!this.R.blockFlat, true); return;
+      case 'surface': this.surfaceDialog(); return;
+      case 'find': this.findDialog(); return;
+      case 'goto': this.gotoDialog(); return;
+      case 'theme': this.R.setTheme(!this.R.dark); $('view').style.background = this.R.dark ? '#1b1e23' : '#fff'; this.renderLayers(); this.vc.draw(); return;
+      case 'help': this.helpDialog(); return;
+      case 'erase': this.deleteSel(); return;
+      case 'color': this.colorDialog(); return;
+      case 'tolayer': if (!S.selList.length) { this.toast('Önce nesne seçin.'); return; } this.editor.layer(S.selList.slice(), this.curLayer); return;
+      case 'join': if (!S.selList.length) { this.toast('Önce birleştirilecek nesneleri seçin.'); return; } this.joinSel(); return;
+      case 'explode': if (!S.selList.length) { this.toast('Önce patlatılacak nesneleri seçin.'); return; } this.explodeSel(); return;
+      case 'flatten': this.flattenDialog(); return;
+    }
+    this.toast('Anlaşılmadı: "' + raw + '" — komut listesi için F1');
+  }
+  // komut satırı önerileri
+  suggest(text) {
+    const box = $('sugg'), t = text.trim().toLocaleLowerCase('tr');
+    if (!t || /^[-@\d.,;]/.test(t)) { box.style.display = 'none'; this.sugg = []; return; }
+    const hit = [];
+    for (const c of COMMANDS) {
+      const ex = c[0].indexOf(t) === 0 ? 0 : c[0].some(a => a.indexOf(t) === 0) ? 1 : c[3].toLocaleLowerCase('tr').indexOf(t) >= 0 ? 2 : -1;
+      if (ex >= 0) hit.push([ex, c]);
+    }
+    hit.sort((a, b) => a[0] - b[0]);
+    this.sugg = hit.slice(0, 8).map(h => h[1]); this.suggI = 0;
+    if (!this.sugg.length) { box.style.display = 'none'; return; }
+    box.innerHTML = this.sugg.map((c, i) => '<div class="si' + (i === 0 ? ' on' : '') + '" data-i="' + i + '"><b>' + esc(c[0][0].toUpperCase()) + '</b>' + esc(c[3]) + ' <span>' + esc(c[0].slice(1, 3).join(', ')) + '</span></div>').join('');
+    box.style.display = 'block';
+  }
+
+  // ───────────── olaylar
+  startPan(e) { this.panning = { x: e.offsetX, y: e.offsetY, moved: false, btn: e.button }; $('ov').style.cursor = 'grabbing'; }
+  stopAnim() { if (this.R.anim) { cancelAnimationFrame(this.R.anim); this.R.anim = null; this.viewChanged(); } }
+  initMenus() {
+    const dds = [...document.querySelectorAll('.dd')];
+    const close = () => dds.forEach(d => d.classList.remove('open'));
+    const open = (dd) => { close(); this.updateButtons(); dd.classList.add('open'); };
+    for (const dd of dds) {
+      const btn = dd.querySelector(':scope > .dd-btn');
+      btn.addEventListener('click', (e) => { e.stopPropagation(); if (dd.classList.contains('open')) close(); else open(dd); });
+      btn.addEventListener('mouseenter', () => { if (dds.some(d => d.classList.contains('open')) && !dd.classList.contains('open')) open(dd); });
+      dd.querySelector('.dd-menu').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b && !b.disabled) close(); });
+    }
+    document.addEventListener('pointerdown', (e) => { if (!e.target.closest('.dd')) close(); if (!e.target.closest('#ctx')) $('ctx').style.display = 'none'; }, true);
+    this.closeMenus = close;
+    this.menusOpen = () => dds.some(d => d.classList.contains('open'));
+  }
+  bind() {
+    const ov = $('ov'), R = this.R, S = this.store;
+    this.initMenus();
+    $('fileIn').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; this.load(f, null); };
+    document.querySelectorAll('[data-cmd]').forEach(b => b.addEventListener('click', () => { if (!b.disabled) this.runCommand(b.dataset.cmd); }));
+    document.querySelectorAll('[data-tool]').forEach(b => b.addEventListener('click', () => this.setTool(b.dataset.tool)));
+    document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => this.setNamedView(b.dataset.view));
+    document.querySelectorAll('[data-zs]').forEach(b => b.onclick = () => this.setZScale(+b.dataset.zs));
+    document.querySelectorAll('[data-style]').forEach(b => b.onclick = () => this.setStyle(b.dataset.style));
+    document.querySelectorAll('[data-gizmo]').forEach(b => b.onclick = () => {
+      const g = b.dataset.gizmo;
+      if (g === 'off') this.gizmo.enabled = !this.gizmo.enabled; else { this.gizmo.enabled = true; this.gizmo.mode = g; }
+      this.updateButtons(); R.request();
+    });
+    $('tSnap').onclick = () => this.toggleSnap(); $('tOrtho').onclick = () => this.toggleOrtho();
+    document.querySelectorAll('[data-snap]').forEach(b => b.onclick = () => {
+      const k = b.dataset.snap; this.snapModes[k] = !this.snapModes[k]; b.classList.toggle('on', this.snapModes[k]);
+      if (this.snapModes[k] && !this.snapOn) this.toggleSnap();
+    });
+    $('curLayer').onchange = (e) => this.setCurLayer(+e.target.value);
+
+    // katman paneli
+    $('laySearch').oninput = () => this.renderLayers();
+    $('layAll').onclick = () => this.setLayerVis(() => true);
+    $('layNone').onclick = () => this.setLayerVis(() => false);
+    $('layInv').onclick = () => this.setLayerVis((i, v) => !v);
+    $('layers').addEventListener('click', (e) => {
+      const row = e.target.closest('.lay'); if (!row) return;
+      const i = +row.dataset.i;
+      if (e.target.closest('[data-eye]')) { S.layerVis[i] = S.layerVis[i] ? 0 : 1; this.setLayerVis((k, v) => v); return; }
+      this.setCurLayer(i); this.toast('Aktif katman: ' + S.layers[i].name);
+    });
+    $('layers').addEventListener('dblclick', (e) => {
+      const row = e.target.closest('.lay'); if (!row || e.target.closest('[data-eye]')) return;
+      const i = +row.dataset.i; this.setLayerVis(k => k === i); this.toast('Yalnızca "' + S.layers[i].name + '" gösteriliyor');
+    });
+    $('layers').addEventListener('contextmenu', (e) => {
+      const row = e.target.closest('.lay'); if (!row) return;
+      e.preventDefault(); e.stopPropagation();
+      const i = +row.dataset.i, L = S.layers[i];
+      this.contextMenu(e.clientX, e.clientY, [
+        { label: 'Bu katmandaki nesneleri seç (' + fmtN(L.count || 0) + ')', fn: () => this.selectLayer(i), disabled: !S.done },
+        { label: 'Yalnız bu katmanı göster', fn: () => { this.setLayerVis(k => k === i); } },
+        { label: S.layerVis[i] ? 'Katmanı gizle' : 'Katmanı göster', fn: () => { S.layerVis[i] = S.layerVis[i] ? 0 : 1; this.setLayerVis((k, v) => v); } },
+        { label: 'Aktif katman yap', fn: () => this.setCurLayer(i) },
+        '-',
+        { label: 'Seçili nesneleri bu katmana taşı (' + fmtN(S.selList.length) + ')', fn: () => this.editor.layer(S.selList.slice(), i), disabled: !S.selList.length }
+      ]);
+    });
+
+    // sürükle-bırak
+    const view = $('view');
+    view.addEventListener('dragover', (e) => { e.preventDefault(); view.classList.add('dragover'); });
+    view.addEventListener('dragleave', () => view.classList.remove('dragover'));
+    view.addEventListener('drop', async (e) => {
+      e.preventDefault(); view.classList.remove('dragover');
+      const it = e.dataTransfer.items && e.dataTransfer.items[0];
+      let handle = null;
+      if (it && it.getAsFileSystemHandle) { try { handle = await it.getAsFileSystemHandle(); } catch (err) { handle = null; } }
+      const f = e.dataTransfer.files[0];
+      if (f) this.load(f, handle && handle.kind === 'file' ? handle : null);
+    });
+
+    // fare
+    ov.addEventListener('contextmenu', (e) => e.preventDefault());
+    ov.addEventListener('pointerdown', (e) => {
+      ov.setPointerCapture(e.pointerId);
+      if (document.activeElement === $('cmdin') && !this.tool.wantsPoints) $('cmdin').blur();
+      this.track(e);
+      if (e.button === 1 && e.shiftKey) { e.preventDefault(); this.stopAnim(); this.beginOrbit(); this.orbiting = { x: e.offsetX, y: e.offsetY }; ov.style.cursor = 'move'; return; }
+      if (e.button === 1 || e.button === 2 || (e.button === 0 && this.spaceDown)) { e.preventDefault(); this.stopAnim(); this.startPan(e); return; }
+      if (e.button !== 0) return;
+      // seçim tutamacı
+      if (this.toolName === 'select') { const h = this.gizmo.hit(e.offsetX, e.offsetY); if (h && this.gizmo.begin(h, e)) { R.request(); return; } }
+      const t = this.tool;
+      if (t.down) t.down(this.point(), e);
+      else if (t.click) { const base = t.base || (t.pts && t.pts[t.pts.length - 1]) || t.c || t.a || (t.P && t.P[t.P.length - 1]); Promise.resolve(t.click(this.point(base))).then(() => { this.updatePrompt(); R.request(); }); }
+    });
+    ov.addEventListener('pointermove', (e) => {
+      const o = this.orbiting;
+      if (o) { this.orbitBy(e.offsetX - o.x, e.offsetY - o.y); o.x = e.offsetX; o.y = e.offsetY; this.track(e); return; }
+      const p = this.panning;
+      if (p) {
+        const dx = e.offsetX - p.x, dy = e.offsetY - p.y;
+        if (Math.abs(dx) + Math.abs(dy) > 2) p.moved = true;
+        if (p.moved) { R.pan(dx, dy); p.x = e.offsetX; p.y = e.offsetY; this.userMoved = true; }
+        this.track(e); return;
+      }
+      this.track(e);
+      if (this.gizmo.drag) { this.gizmo.move(e, e.shiftKey); return; }
+      if (this.toolName === 'select' && this.gizmo.active && !(this.tool.drag)) {
+        const h = this.gizmo.hit(e.offsetX, e.offsetY);
+        if (h !== this.gizmo.hover) { this.gizmo.hover = h; ov.style.cursor = h ? 'pointer' : 'crosshair'; R.request(); }
+      }
+      this.updateSnap(); this.showCoords();
+      if (this.tool.move) this.tool.move(e);
+      if (this.toolName === 'area') this.updatePrompt();
+      R.request();
+    });
+    ov.addEventListener('pointerup', (e) => {
+      if (this.orbiting) { this.orbiting = null; this.endOrbit(); ov.style.cursor = this.toolName === 'pan' ? 'grab' : this.toolName === 'orbit' ? 'move' : 'crosshair'; return; }
+      if (this.gizmo.drag) { this.gizmo.end(); return; }
+      const p = this.panning;
+      if (p) {
+        this.panning = null; ov.style.cursor = this.toolName === 'pan' ? 'grab' : this.toolName === 'orbit' ? 'move' : 'crosshair';
+        if (!p.moved && p.btn === 2) this.rightClick();
+        return;
+      }
+      if (e.button === 0 && this.tool.up) { this.tool.up(e); R.request(); }
+    });
+    ov.addEventListener('dblclick', (e) => {
+      if (e.button === 1) { this.fit(); return; }
+      if (this.tool.dbl) { this.tool.dbl(); this.updatePrompt(); R.request(); }
+    });
+    ov.addEventListener('auxclick', (e) => { if (e.button === 1 && e.detail === 2) this.fit(); });
+    ov.addEventListener('wheel', (e) => {
+      e.preventDefault(); this.stopAnim();
+      const f = Math.pow(1.0018, -e.deltaY * (e.deltaMode === 1 ? 33 : 1));
+      R.zoomAt(e.offsetX, e.offsetY, f); this.userMoved = true; this.track(e); this.gizmo.invalidate();
+    }, { passive: false });
+
+    // komut satırı
+    const cmd = $('cmdin');
+    cmd.addEventListener('input', () => this.suggest(cmd.value));
+    cmd.addEventListener('blur', () => setTimeout(() => { $('sugg').style.display = 'none'; }, 150));
+    $('sugg').addEventListener('mousedown', (e) => { const r = e.target.closest('.si'); if (r) { e.preventDefault(); const c = this.sugg[+r.dataset.i]; cmd.value = ''; $('sugg').style.display = 'none'; this.runCommand(c[0][0]); if (!this.tool.wantsPoints) cmd.blur(); } });
+    const submit = () => {
+      let v = cmd.value.trim();
+      const box = $('sugg');
+      if (box.style.display === 'block' && this.sugg && this.sugg.length && !ALIAS.has(v.toLocaleLowerCase('tr')) && !(this.tool.input && /^[-@\d]/.test(v))) v = this.sugg[this.suggI][0][0];
+      cmd.value = ''; box.style.display = 'none';
+      if (!v) { this.enter(); return; }
+      const t = this.tool;
+      if (t.input && t.input(v)) { this.updatePrompt(); this.R.request(); }
+      else this.runCommand(v);
+      if (!this.tool.wantsPoints) cmd.blur();
+    };
+    cmd.addEventListener('keydown', (e) => {
+      const box = $('sugg');
+      if (box.style.display === 'block' && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+        e.preventDefault(); this.suggI = (this.suggI + (e.key === 'ArrowDown' ? 1 : this.sugg.length - 1)) % this.sugg.length;
+        box.querySelectorAll('.si').forEach((el, i) => el.classList.toggle('on', i === this.suggI)); return;
+      }
+      if (e.key === 'Tab' && box.style.display === 'block') { e.preventDefault(); cmd.value = this.sugg[this.suggI][0][0]; this.suggest(cmd.value); return; }
+      if (e.key === 'Enter' || (e.key === ' ' && cmd.value.trim() && !/[,;@]/.test(cmd.value) && !this.tool.input)) { e.preventDefault(); submit(); }
+      else if (e.key === ' ' && cmd.value.trim() && this.tool.input) { e.preventDefault(); submit(); }
+      else if (e.key === 'Escape') { cmd.value = ''; box.style.display = 'none'; cmd.blur(); this.escape(); }
+      else if (e.key === 'Backspace' && !cmd.value && this.tool.undoPt) { e.preventDefault(); this.tool.undoPt(); this.updatePrompt(); this.R.request(); }
+      e.stopPropagation();
+    });
+    window.addEventListener('keydown', (e) => {
+      if ($('modal').classList.contains('show')) { if (e.key === 'Escape') this.closeModal(); return; }
+      const tgt = e.target;
+      if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'SELECT' || tgt.tagName === 'TEXTAREA')) return;
+      const k = e.key, ctrl = e.ctrlKey || e.metaKey;
+      if (k === 'Escape' && this.menusOpen()) { this.closeMenus(); return; }
+      if (ctrl && k.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? this.editor.redo() : this.editor.undo(); this.selChanged(); return; }
+      if (ctrl && k.toLowerCase() === 'y') { e.preventDefault(); this.editor.redo(); this.selChanged(); return; }
+      if (ctrl && k.toLowerCase() === 's') { e.preventDefault(); if (S.done) Export.saveDXF(this, 'full'); return; }
+      if (ctrl && k.toLowerCase() === 'o') { e.preventDefault(); this.openDialog(); return; }
+      if (ctrl && k.toLowerCase() === 'a') { e.preventDefault(); this.selectAll(); return; }
+      if (ctrl && k.toLowerCase() === 'f') { e.preventDefault(); this.findDialog(); return; }
+      if (ctrl || e.altKey) return;
+      if (k === 'Escape') { if (this.gizmo.drag) { this.gizmo.cancel(); return; } this.escape(); return; }
+      if (k === 'Backspace' && this.tool.undoPt) { e.preventDefault(); this.tool.undoPt(); this.updatePrompt(); R.request(); return; }
+      if (k === 'Delete') { e.preventDefault(); this.deleteSel(); return; }
+      if (k === 'Enter' || k === ' ') { e.preventDefault(); this.enter(true); return; }
+      if (k === 'Home') { this.homeView(); return; }
+      if (k === 'F1') { e.preventDefault(); this.helpDialog(); return; }
+      if (k === 'F3') { e.preventDefault(); this.toggleSnap(); return; }
+      if (k === 'F8') { e.preventDefault(); this.toggleOrtho(); return; }
+      // harf / rakam: komut satırına (AutoCAD dinamik giriş)
+      if (k.length === 1 && /[\p{L}\d@.\-]/u.test(k)) { cmd.focus(); return; }
+    });
+    window.addEventListener('beforeunload', (e) => { if (this.store.dirty) { e.preventDefault(); e.returnValue = ''; } });
+  }
+  track(e) {
+    this.mouse.sx = e.offsetX; this.mouse.sy = e.offsetY;
+    const [wx, wy] = this.R.s2w(e.offsetX, e.offsetY);
+    this.mouse.wx = wx; this.mouse.wy = wy;
+    this.showCoords();
+  }
+  showCoords() {
+    const R = this.R, sp = this.snapPt;
+    if (sp) { const [ax, ay] = this.abs(sp.p[0], sp.p[1]); $('coords').textContent = 'X: ' + fmtC(ax) + '   Y: ' + fmtC(ay) + '   Z: ' + fmtC(sp.p[2]); return; }
+    if (!isFinite(this.mouse.wx)) { $('coords').textContent = 'X: —   Y: —'; return; }
+    const [ax, ay] = this.abs(this.mouse.wx, this.mouse.wy);
+    $('coords').textContent = 'X: ' + fmtC(ax) + '   Y: ' + fmtC(ay) + (R.is2D ? '' : '   Z: ' + fmtC(R.cz));
+  }
+  fit() {
+    const S = this.store, R = this.R;
+    if (!S.ext) { if (S.view0) R.fit(S.view0); return; }
+    const now = performance.now();
+    if (now - this.lastFit < 1500 && (S.view0 !== S.ext || S.zview[0] !== S.zext[0] || S.zview[1] !== S.zext[1])) { R.fit(S.ext, 0.04, S.zext); this.toast('Tüm çizim (aykırı uzak nesneler dahil)'); this.lastFit = 0; }
+    else { R.fit(S.view0, 0.04, S.zview); this.lastFit = now; if (S.view0 !== S.ext) this.toast('Tekrar basarsanız uzak/aykırı nesneler dahil tümü gösterilir'); }
+    this.userMoved = true; this.gizmo.invalidate();
+  }
+  escape() {
+    const t = this.tool;
+    if (this.toolName !== 'select') { this.setTool('select'); return; }
+    if (t.drag) { t.drag = null; this.R.request(); return; }
+    this.pendingTool = null;
+    if (this.marker) { this.marker = null; this.R.request(); }
+    if (this.store.selList.length) { this.store.clearSel(); this.selChanged(); }
+    this.updatePrompt();
+  }
+  enter(fromKey) {
+    const t = this.tool;
+    if (t.enter && t.enter()) { this.updatePrompt(); this.R.request(); return; }
+    if (this.toolName !== 'select') { this.setTool('select'); return; }
+    // boş Enter: son komutu tekrarla (AutoCAD)
+    if (fromKey && this.lastCmd) { const n = this.lastCmd; if (this.tools[n]) this.setTool(n); else this.runCommand(n); }
+  }
+  rightClick() {
+    const t = this.tool;
+    if (t.right && t.right()) { this.updatePrompt(); this.R.request(); return; }
+    if (t.enter && t.enter()) { this.updatePrompt(); this.R.request(); return; }
+    if (this.toolName !== 'select') this.setTool('select');
+  }
+  toggleSnap() { this.snapOn = !this.snapOn; $('tSnap').classList.toggle('on', this.snapOn); this.snapPt = null; this.R.request(); }
+  toggleOrtho() { this.ortho = !this.ortho; $('tOrtho').classList.toggle('on', this.ortho); }
+  selectAll() {
+    const S = this.store; if (!S.done) return;
+    const ids = []; for (let i = 0; i < S.nEnt; i++) ids.push(i);
+    S.setSel(ids, 'set'); this.selChanged(); this.toast(fmtN(S.selList.length) + ' nesne seçildi');
+  }
+}
+
+function tr(k, v) { return '<tr><td>' + k + '</td><td>' + v + '</td></tr>'; }
+function fmtP(x, y) { return 'X ' + fmtC(x) + '<br>Y ' + fmtC(y); }
+function fmtC(v) { if (!isFinite(v)) return '—'; const a = Math.abs(v); return v.toLocaleString('tr-TR', { maximumFractionDigits: a >= 1000 ? 3 : a >= 1 ? 4 : 6 }); }
+// Bir varlık grubunun aykırı değerlerden arınmış kutusu (ilk görünüm için)
+function robustBox(bb) {
+  const n = bb.length >> 2; if (!n) return null;
+  const xs = [], ys = []; const step = Math.max(1, Math.floor(n / 50000));
+  for (let i = 0; i < n; i += step) { const a = bb[4 * i]; if (!(a <= bb[4 * i + 2])) continue; xs.push((a + bb[4 * i + 2]) / 2); ys.push((bb[4 * i + 1] + bb[4 * i + 3]) / 2); }
+  if (!xs.length) return null;
+  const fx = Float64Array.from(xs).sort(), fy = Float64Array.from(ys).sort();
+  const q = (a, p) => a[Math.floor(p * (a.length - 1))];
+  const x0 = q(fx, 0.01), x1 = q(fx, 0.99), y0 = q(fy, 0.01), y1 = q(fy, 0.99);
+  const w = Math.max(x1 - x0, 1), h = Math.max(y1 - y0, 1);
+  return [x0 - w * 0.1, y0 - h * 0.1, x1 + w * 0.1, y1 + h * 0.1];
+}
+
+window.app = new App();

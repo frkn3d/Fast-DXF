@@ -1,0 +1,566 @@
+/* DXF Okuyucu — veri deposu: worker'dan gelen parçaları biriktirir, mekânsal ızgara ve seçim. */
+'use strict';
+
+class GrowM {
+  constructor(T, cap) { this.T = T; this.a = new T(cap || 1024); this.n = 0; }
+  ensure(k) {
+    if (this.n + k > this.a.length) {
+      let c = this.a.length * 2; while (c < this.n + k) c *= 2;
+      const b = new this.T(c); b.set(this.a.subarray(0, this.n)); this.a = b;
+    }
+  }
+  push(v) { if (this.n >= this.a.length) this.ensure(1); this.a[this.n++] = v; }
+  append(arr) { this.ensure(arr.length); this.a.set(arr, this.n); this.n += arr.length; }
+}
+
+// Varlık bayrakları (dxf-core ile uyumlu)
+const F_BYLAYER = 1, F_NEW = 2, F_DEL = 4, F_DYN = 8, F_POINTS = 16, F_NOBBOX = 32;
+
+class Store {
+  constructor(core) { this.core = core; this.clear(); }
+  clear() {
+    this.file = null; this.info = null; this.done = false;
+    this.layers = []; this.layerVis = new Uint8Array(65536).fill(1);
+    this.blocks = []; this.chunks = [];
+    const G = (T, n) => new GrowM(T, n || 1 << 14);
+    this.E = {
+      type: G(Uint8Array), flags: G(Uint8Array), layer: G(Uint16Array), color: G(Uint32Array), aci: G(Int16Array),
+      bb: G(Float32Array, 1 << 16), zr: G(Float32Array, 1 << 15), chunk: G(Uint32Array), vs: G(Uint32Array), vc: G(Uint32Array),
+      is: G(Uint32Array), ic: G(Uint32Array), ts: G(Uint32Array), tc: G(Uint32Array), fs: G(Float64Array), fe: G(Float64Array),
+      rs: G(Uint32Array), rc: G(Uint32Array)
+    };
+    this.nEnt = 0;
+    this.TX = {
+      x: G(Float32Array), y: G(Float32Array), z: G(Float32Array), h: G(Float32Array), r: G(Float32Array), wf: G(Float32Array), al: G(Uint8Array),
+      col: G(Uint32Array), lay: G(Uint16Array), ent: G(Uint32Array), hid: G(Uint8Array)
+    };
+    this.TS = []; this.nText = 0;
+    this.IN = { blk: G(Uint32Array), slot: G(Uint32Array), ent: G(Uint32Array) };
+    this.nInst = 0;
+    this.edits = new Map();     // id → {dx,dy,aci,layer,del}
+    this.newInfo = new Map();   // yeni varlıklar: id → {def} | {src}
+    this.grid = null; this.dyn = new Set();
+    this.sel = new Uint8Array(0); this.selList = [];
+    this.editChunk = -1;
+    this.ext = null; this.view0 = null;
+    this.zext = [0, 0]; this.zview = [0, 0]; this.has3D = false;
+    this.flatBlocks = false;    // bloklarda iç Z yok sayılır (Renderer.blockFlat ile aynı)
+    this.surfaces = [];         // arazi yüzeyleri (TIN): {name, pos, z, n, gl}
+    this.nTri = 0;
+    this.dirty = false;
+  }
+
+  // ── worker mesajları
+  onLayers(list) {
+    for (let i = 0; i < list.length; i++) {
+      const L = list[i], old = this.layers[i];
+      this.layers[i] = Object.assign(old || { count: 0 }, L);
+      if (!old) this.layerVis[i] = (L.off || L.frozen) ? 0 : 1;
+    }
+  }
+  onChunk(d) {
+    this.chunks[d.idx] = {
+      idx: d.idx, pos: d.pos, col: d.col, lay: d.lay, ppos: d.ppos, pcol: d.pcol, play: d.play, z: d.z, pz: d.pz,
+      tpos: d.tpos, tz: d.tz, tcol: d.tcol, tlay: d.tlay,
+      nV: d.pos.length >> 1, nP: d.ppos.length >> 1, nT: d.tpos.length >> 1, gl: null, dirty: null,
+      cap: d.pos.length >> 1, pcap: d.ppos.length >> 1, tcap: d.tpos.length >> 1
+    };
+    this.nTri += d.tpos.length / 6;
+  }
+  onEnts(d) {
+    const E = this.E;
+    for (const k in d) E[k].append(d[k]);
+    for (let i = 0; i < d.layer.length; i++) { const L = this.layers[d.layer[i]]; if (L) L.count = (L.count || 0) + 1; }
+    this.nEnt += d.type.length;
+  }
+  onTexts(d) {
+    const X = this.TX;
+    for (const k in d) if (k !== 'str') X[k].append(d[k]);
+    X.hid.ensure(d.x.length); X.hid.n += d.x.length;
+    for (const s of d.str) this.TS.push(s);
+    this.nText += d.x.length;
+  }
+  block(idx) {
+    let B = this.blocks[idx];
+    if (!B) {
+      B = this.blocks[idx] = {
+        idx, name: '', bb: null, zb: null, pos: null, col: null, lay: null, ppos: null, pcol: null, play: null, z: null, pz: null, nV: 0, nP: 0,
+        tpos: null, tz: null, tcol: null, tlay: null, nT: 0,
+        f: new GrowM(Float32Array, 64), fz: new GrowM(Float32Array, 16), c: new GrowM(Uint32Array, 16), n: 0, gl: null, instDirty: true, geomDirty: true
+      };
+    }
+    return B;
+  }
+  onInst(d) {
+    const n = d.blk.length, IN = this.IN;
+    for (let i = 0; i < n; i++) {
+      const B = this.block(d.blk[i]);
+      B.f.ensure(8); B.c.ensure(2); B.fz.ensure(2);
+      const f = B.f.a, o = B.f.n;
+      f[o] = d.m[6 * i]; f[o + 1] = d.m[6 * i + 1]; f[o + 2] = d.m[6 * i + 2];
+      f[o + 3] = d.m[6 * i + 3]; f[o + 4] = d.m[6 * i + 4]; f[o + 5] = d.m[6 * i + 5];
+      f[o + 6] = d.lay[i]; f[o + 7] = 1; B.f.n += 8;
+      B.fz.a[B.fz.n++] = d.z[2 * i]; B.fz.a[B.fz.n++] = d.z[2 * i + 1];
+      B.c.a[B.c.n++] = d.col[i]; B.c.a[B.c.n++] = d.lcol[i];
+      IN.blk.push(d.blk[i]); IN.slot.push(B.n); IN.ent.push(d.ent[i]);
+      B.n++; B.instDirty = true;
+    }
+    this.nInst += n;
+  }
+  onBlocks(list) {
+    for (const o of list) {
+      const B = this.block(o.idx);
+      B.name = o.name; B.bb = isFinite(o.bb[0]) ? o.bb : null; B.zb = o.zb[0] <= o.zb[1] ? o.zb : null;
+      B.pos = o.pos; B.col = o.col; B.lay = o.lay; B.ppos = o.ppos; B.pcol = o.pcol; B.play = o.play; B.z = o.z; B.pz = o.pz;
+      B.tpos = o.tpos; B.tz = o.tz; B.tcol = o.tcol; B.tlay = o.tlay;
+      B.nV = o.pos.length >> 1; B.nP = o.ppos.length >> 1; B.nT = o.tpos.length >> 1; B.geomDirty = true;
+    }
+  }
+  onDone(info) {
+    this.info = info; this.done = true;
+    // blok sınır kutusu bilinmeyen INSERT'ler
+    const E = this.E;
+    for (let id = 0; id < this.nEnt; id++) if (E.flags.a[id] & F_NOBBOX) this.recomputeInsertBBox(id);
+    this.computeExtents();
+    this.grid = new SpatialGrid(this);
+  }
+
+  // ── yardımcılar
+  bbox(id) { const b = this.E.bb.a; return [b[4 * id], b[4 * id + 1], b[4 * id + 2], b[4 * id + 3]]; }
+  recomputeInsertBBox(id) {
+    const E = this.E, b = E.bb.a;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    const is = E.is.a[id], ic = E.ic.a[id];
+    for (let k = is; k < is + ic; k++) {
+      const B = this.blocks[this.IN.blk.a[k]];
+      if (!B) continue;
+      const s = this.IN.slot.a[k], sz = B.fz.a[2 * s], tz = B.fz.a[2 * s + 1];
+      if (B.zb) { const a = sz * B.zb[0] + tz, c = sz * B.zb[1] + tz; z0 = Math.min(z0, a, c); z1 = Math.max(z1, a, c); }
+      else { z0 = Math.min(z0, tz); z1 = Math.max(z1, tz); }
+      if (!B.bb) continue;
+      const f = B.f.a, o = s * 8;
+      for (let c = 0; c < 4; c++) {
+        const x = (c & 1) ? B.bb[2] : B.bb[0], y = (c & 2) ? B.bb[3] : B.bb[1];
+        const X = f[o] * x + f[o + 1] * y + f[o + 2], Y = f[o + 3] * x + f[o + 4] * y + f[o + 5];
+        if (X < x0) x0 = X; if (X > x1) x1 = X; if (Y < y0) y0 = Y; if (Y > y1) y1 = Y;
+      }
+    }
+    const ts = E.ts.a[id], tc = E.tc.a[id];
+    if (tc) {
+      const bb = [x0, y0, x1, y1];
+      for (let t = ts; t < ts + tc; t++) this.core.textBBox(this.TX.x.a[t], this.TX.y.a[t], this.TX.h.a[t], this.TX.r.a[t], this.TX.al.a[t], this.TS[t], this.TX.wf.a[t], bb);
+      [x0, y0, x1, y1] = bb;
+    }
+    b[4 * id] = x0; b[4 * id + 1] = y0; b[4 * id + 2] = x1; b[4 * id + 3] = y1;
+    if (z0 <= z1) { E.zr.a[2 * id] = z0; E.zr.a[2 * id + 1] = z1; }
+    E.flags.a[id] &= ~F_NOBBOX;
+  }
+  // Varlığın geometrisinden kesin sınır kutusu ve kot aralığı (dönüşümlerden sonra)
+  recomputeBBox(id) {
+    const E = this.E, b = E.bb.a;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    const add = (x, y, z) => { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; if (z < z0) z0 = z; if (z > z1) z1 = z; };
+    const ch = this.chunks[E.chunk.a[id]], vs = E.vs.a[id], vc = E.vc.a[id];
+    if (ch && vc) {
+      const pts = (E.flags.a[id] & F_POINTS) !== 0, P = pts ? ch.ppos : ch.pos, Z = pts ? ch.pz : ch.z;
+      for (let v = vs; v < vs + vc; v++) add(P[2 * v], P[2 * v + 1], Z[v]);
+    }
+    const rs = E.rs.a[id], rc = E.rc.a[id];
+    if (ch && rc) for (let v = rs; v < rs + rc; v++) add(ch.tpos[2 * v], ch.tpos[2 * v + 1], ch.tz[v]);
+    const is = E.is.a[id], ic = E.ic.a[id];
+    for (let k = is; k < is + ic; k++) {
+      const B = this.blocks[this.IN.blk.a[k]]; if (!B) continue;
+      const s = this.IN.slot.a[k], f = B.f.a, o = s * 8, sz = B.fz.a[2 * s], tz = B.fz.a[2 * s + 1];
+      if (!B.bb) { add(f[o + 2], f[o + 5], tz); continue; }
+      for (let c = 0; c < 8; c++) {
+        const x = (c & 1) ? B.bb[2] : B.bb[0], y = (c & 2) ? B.bb[3] : B.bb[1], z = B.zb ? ((c & 4) ? B.zb[1] : B.zb[0]) : 0;
+        add(f[o] * x + f[o + 1] * y + f[o + 2], f[o + 3] * x + f[o + 4] * y + f[o + 5], sz * z + tz);
+      }
+    }
+    const ts = E.ts.a[id], tc = E.tc.a[id];
+    if (tc) {
+      const bb = [x0, y0, x1, y1];
+      for (let t = ts; t < ts + tc; t++) {
+        this.core.textBBox(this.TX.x.a[t], this.TX.y.a[t], this.TX.h.a[t], this.TX.r.a[t], this.TX.al.a[t], this.TS[t], this.TX.wf.a[t], bb);
+        const z = this.TX.z.a[t]; if (z < z0) z0 = z; if (z > z1) z1 = z;
+      }
+      [x0, y0, x1, y1] = bb;
+    }
+    if (!(x0 <= x1)) return;
+    b[4 * id] = x0; b[4 * id + 1] = y0; b[4 * id + 2] = x1; b[4 * id + 3] = y1;
+    if (z0 <= z1) { E.zr.a[2 * id] = z0; E.zr.a[2 * id + 1] = z1; }
+  }
+  computeExtents() {
+    const n = this.nEnt, b = this.E.bb.a, fl = this.E.flags.a, zr = this.E.zr.a;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, cnt = 0, z0 = Infinity, z1 = -Infinity;
+    for (let i = 0; i < n; i++) {
+      if (fl[i] & F_DEL) continue;
+      const a = b[4 * i]; if (!(a <= b[4 * i + 2])) continue;
+      if (a < x0) x0 = a; if (b[4 * i + 1] < y0) y0 = b[4 * i + 1];
+      if (b[4 * i + 2] > x1) x1 = b[4 * i + 2]; if (b[4 * i + 3] > y1) y1 = b[4 * i + 3];
+      if (zr[2 * i] < z0) z0 = zr[2 * i]; if (zr[2 * i + 1] > z1) z1 = zr[2 * i + 1];
+      cnt++;
+    }
+    if (!cnt) { this.ext = [-50, -50, 50, 50]; this.view0 = this.ext; this.zext = [0, 0]; this.zview = [0, 0]; this.has3D = false; return; }
+    this.ext = [x0, y0, x1, y1];
+    this.zext = [z0, z1];
+    this.has3D = z1 > z0 || z0 !== 0;
+    this.zview = this.zRange(null);
+    // Aykırı nesneleri dışlayan "yoğun" görünüm: merkezlerin %0.5–%99.5 dilimi
+    const step = Math.max(1, Math.floor(n / 200000));
+    const xs = [], ys = [];
+    for (let i = 0; i < n; i += step) {
+      if (fl[i] & F_DEL) continue;
+      const a = b[4 * i]; if (!(a <= b[4 * i + 2])) continue;
+      xs.push((a + b[4 * i + 2]) / 2); ys.push((b[4 * i + 1] + b[4 * i + 3]) / 2);
+    }
+    if (xs.length < 50) { this.view0 = this.ext; return; }
+    const fx = Float64Array.from(xs).sort(), fy = Float64Array.from(ys).sort();
+    const q = (a, p) => a[Math.min(a.length - 1, Math.max(0, Math.floor(p * (a.length - 1))))];
+    let vx0 = q(fx, 0.005), vx1 = q(fx, 0.995), vy0 = q(fy, 0.005), vy1 = q(fy, 0.995);
+    const w = Math.max(vx1 - vx0, 1e-6), h = Math.max(vy1 - vy0, 1e-6);
+    vx0 -= w * 0.05; vx1 += w * 0.05; vy0 -= h * 0.05; vy1 += h * 0.05;
+    const full = (x1 - x0) * (y1 - y0), dense = (vx1 - vx0) * (vy1 - vy0);
+    this.view0 = dense < full * 0.25 ? [vx0, vy0, vx1, vy1] : this.ext;
+  }
+  // İç kotu hatalı görünen bloklar (ör. sembol çizgilerinin bir ucu Z=0, diğeri arazi kotu)
+  suspiciousBlocks() {
+    let n = 0, refs = 0;
+    for (const B of this.blocks) {
+      if (!B || !B.zb || !B.bb || !B.n) continue;
+      const span = B.zb[1] - B.zb[0], size = Math.max(B.bb[2] - B.bb[0], B.bb[3] - B.bb[1], 1e-9);
+      if (span > 50 && span > 20 * size) { n++; refs += B.n; }
+    }
+    return { blocks: n, refs };
+  }
+  // Bir bölgedeki (null: tümü) nesnelerin aykırı değerlerden arınmış kot aralığı
+  zRange(box) {
+    const E = this.E, fl = E.flags.a, zr = E.zr.a, b = E.bb.a;
+    const lo = [], hi = [];
+    const take = (i) => {
+      if (fl[i] & F_DEL || !this.layerVis[E.layer.a[i]]) return;
+      lo.push(zr[2 * i]); hi.push(zr[2 * i + 1]);
+    };
+    if (box && this.grid) {
+      let budget = 300000;
+      this.grid.query(box[0], box[1], box[2], box[3], (i) => {
+        if (budget <= 0) return;
+        if (b[4 * i + 2] < box[0] || b[4 * i] > box[2] || b[4 * i + 3] < box[1] || b[4 * i + 1] > box[3]) return;
+        budget--; take(i);
+      });
+    } else {
+      const step = Math.max(1, Math.floor(this.nEnt / 200000));
+      for (let i = 0; i < this.nEnt; i += step) take(i);
+    }
+    if (!lo.length) return this.zview || [0, 0];
+    const L = Float64Array.from(lo).sort(), H = Float64Array.from(hi).sort();
+    const q = (a, p) => a[Math.min(a.length - 1, Math.max(0, Math.floor(p * (a.length - 1))))];
+    if (L.length < 50) return [L[0], H[H.length - 1]];
+    return [q(L, 0.01), q(H, 0.99)];
+  }
+
+  // ── seçim
+  ensureSel() { if (this.sel.length < this.nEnt) { const s = new Uint8Array(Math.max(this.nEnt * 1.25 | 0, 1024)); s.set(this.sel); this.sel = s; } }
+  clearSel() { for (const id of this.selList) this.sel[id] = 0; this.selList = []; }
+  setSel(ids, mode) { // mode: 'set' | 'add' | 'toggle' | 'remove'
+    this.ensureSel();
+    if (mode === 'set') this.clearSel();
+    const fl = this.E.flags.a;
+    for (const id of ids) {
+      if (fl[id] & F_DEL) continue;
+      if (!this.layerVis[this.E.layer.a[id]]) continue;
+      if (mode === 'remove' || (mode === 'toggle' && this.sel[id])) { this.sel[id] = 0; }
+      else if (!this.sel[id]) { this.sel[id] = 1; this.selList.push(id); }
+    }
+    if (mode === 'remove' || mode === 'toggle') this.selList = this.selList.filter(id => this.sel[id]);
+  }
+
+  // Ekrandaki bir noktaya en yakın varlık (tol: dünya birimi)
+  pick(x, y, tol) {
+    let best = -1, bd = tol;
+    const E = this.E, b = E.bb.a, fl = E.flags.a;
+    this.grid.query(x - tol, y - tol, x + tol, y + tol, (id) => {
+      if (fl[id] & F_DEL) return;
+      if (!this.layerVis[E.layer.a[id]]) return;
+      if (x < b[4 * id] - tol || x > b[4 * id + 2] + tol || y < b[4 * id + 1] - tol || y > b[4 * id + 3] + tol) return;
+      const d = this.distTo(id, x, y, bd);
+      if (d < bd) { bd = d; best = id; }
+    });
+    return best;
+  }
+  distTo(id, x, y, lim) {
+    const E = this.E;
+    let best = Infinity;
+    const ch = this.chunks[E.chunk.a[id]], vs = E.vs.a[id], vc = E.vc.a[id];
+    if (vc && ch) {
+      if (E.flags.a[id] & F_POINTS) {
+        const P = ch.ppos;
+        for (let v = vs; v < vs + vc; v++) { const d = Math.hypot(P[2 * v] - x, P[2 * v + 1] - y); if (d < best) best = d; }
+      } else {
+        const P = ch.pos;
+        for (let v = vs; v < vs + vc; v += 2) { const d = segDist(x, y, P[2 * v], P[2 * v + 1], P[2 * v + 2], P[2 * v + 3]); if (d < best) best = d; }
+      }
+    }
+    const is = E.is.a[id], ic = E.ic.a[id];
+    for (let k = is; k < is + ic && best > lim * 0.01; k++) {
+      const B = this.blocks[this.IN.blk.a[k]]; if (!B || !B.pos) continue;
+      const f = B.f.a, o = this.IN.slot.a[k] * 8;
+      // noktayı blok yerel koordinatına çevir
+      const a = f[o], bb = f[o + 1], tx = f[o + 2], c = f[o + 3], d = f[o + 4], ty = f[o + 5];
+      const det = a * d - bb * c; if (Math.abs(det) < 1e-30) continue;
+      const lx = (d * (x - tx) - bb * (y - ty)) / det, ly = (-c * (x - tx) + a * (y - ty)) / det;
+      const sc = Math.sqrt(Math.abs(det));
+      const P = B.pos;
+      for (let v = 0; v < B.nV; v += 2) { const dd = segDist(lx, ly, P[2 * v], P[2 * v + 1], P[2 * v + 2], P[2 * v + 3]) * sc; if (dd < best) best = dd; }
+      const Q = B.ppos;
+      for (let v = 0; v < B.nP; v++) { const dd = Math.hypot(Q[2 * v] - lx, Q[2 * v + 1] - ly) * sc; if (dd < best) best = dd; }
+    }
+    const ts = E.ts.a[id], tc = E.tc.a[id];
+    for (let t = ts; t < ts + tc; t++) {
+      const bb = [Infinity, Infinity, -Infinity, -Infinity];
+      this.core.textBBox(this.TX.x.a[t], this.TX.y.a[t], this.TX.h.a[t], this.TX.r.a[t], this.TX.al.a[t], this.TS[t], this.TX.wf.a[t], bb);
+      if (x >= bb[0] && x <= bb[2] && y >= bb[1] && y <= bb[3]) best = 0;
+    }
+    return best;
+  }
+  // Pencere (window=true: tamamen içinde) veya kesişen (crossing) seçim
+  boxSelect(x0, y0, x1, y1, window) {
+    const out = [], E = this.E, b = E.bb.a, fl = E.flags.a;
+    this.grid.query(x0, y0, x1, y1, (id) => {
+      if (fl[id] & F_DEL) return;
+      if (!this.layerVis[E.layer.a[id]]) return;
+      const a0 = b[4 * id], a1 = b[4 * id + 1], a2 = b[4 * id + 2], a3 = b[4 * id + 3];
+      if (window) { if (a0 >= x0 && a2 <= x1 && a1 >= y0 && a3 <= y1) out.push(id); }
+      else if (a2 >= x0 && a0 <= x1 && a3 >= y0 && a1 <= y1) {
+        if ((a0 >= x0 && a2 <= x1 && a1 >= y0 && a3 <= y1) || this.crosses(id, x0, y0, x1, y1)) out.push(id);
+      }
+    });
+    return out;
+  }
+  crosses(id, x0, y0, x1, y1) {
+    const E = this.E, ch = this.chunks[E.chunk.a[id]], vs = E.vs.a[id], vc = E.vc.a[id];
+    if (E.ic.a[id] || E.tc.a[id]) return true; // blok/yazı: kutu kesişimi yeterli
+    if (!ch || !vc) return true;
+    if (E.flags.a[id] & F_POINTS) {
+      const P = ch.ppos;
+      for (let v = vs; v < vs + vc; v++) { const x = P[2 * v], y = P[2 * v + 1]; if (x >= x0 && x <= x1 && y >= y0 && y <= y1) return true; }
+      return false;
+    }
+    const P = ch.pos;
+    for (let v = vs; v < vs + vc; v += 2) if (segRect(P[2 * v], P[2 * v + 1], P[2 * v + 2], P[2 * v + 3], x0, y0, x1, y1)) return true;
+    return false;
+  }
+
+  // ── 3B görünümde ekran uzayında seçim. cam: Renderer.cam() (project → [sx, sy] ya da null)
+  // Varlığın sınır kutusunun (x,y,z) ekrandaki dikdörtgeni; kamera arkasında köşe varsa null
+  screenRect(id, cam, out) {
+    const b = this.E.bb.a, zr = this.E.zr.a;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    const p = cam.tmp;
+    for (let c = 0; c < 8; c++) {
+      if (!cam.project(b[4 * id + ((c & 1) ? 2 : 0)], b[4 * id + ((c & 2) ? 3 : 1)], zr[2 * id + ((c & 4) ? 1 : 0)], p)) return null;
+      if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0]; if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
+    }
+    out[0] = x0; out[1] = y0; out[2] = x1; out[3] = y1;
+    return out;
+  }
+  // Varlığın ekrandaki her çizgi parçası / noktası için cb(x1,y1,x2,y2) (nokta: x1==x2). false dönerse durur.
+  eachScreenSeg(id, cam, cb) {
+    const E = this.E, p = [0, 0], q = [0, 0];
+    const ch = this.chunks[E.chunk.a[id]], vs = E.vs.a[id], vc = E.vc.a[id];
+    if (ch && vc) {
+      if (E.flags.a[id] & F_POINTS) {
+        const P = ch.ppos, Z = ch.pz;
+        for (let v = vs; v < vs + vc; v++) if (cam.project(P[2 * v], P[2 * v + 1], Z[v], p) && cb(p[0], p[1], p[0], p[1]) === false) return;
+      } else {
+        const P = ch.pos, Z = ch.z;
+        for (let v = vs; v < vs + vc; v += 2) {
+          if (cam.project(P[2 * v], P[2 * v + 1], Z[v], p) && cam.project(P[2 * v + 2], P[2 * v + 3], Z[v + 1], q) && cb(p[0], p[1], q[0], q[1]) === false) return;
+        }
+      }
+    }
+    const is = E.is.a[id], ic = E.ic.a[id];
+    for (let k = is; k < is + ic; k++) {
+      const B = this.blocks[this.IN.blk.a[k]]; if (!B || !B.pos) continue;
+      const s = this.IN.slot.a[k], f = B.f.a, o = s * 8, sz = B.fz.a[2 * s], tz = B.fz.a[2 * s + 1];
+      const fz = this.flatBlocks ? 0 : sz;
+      const tr = (lx, ly, lz, out) => cam.project(f[o] * lx + f[o + 1] * ly + f[o + 2], f[o + 3] * lx + f[o + 4] * ly + f[o + 5], fz * lz + tz, out);
+      const P = B.pos, Z = B.z, lim = Math.min(B.nV, 40000);
+      for (let v = 0; v < lim; v += 2) if (tr(P[2 * v], P[2 * v + 1], Z[v], p) && tr(P[2 * v + 2], P[2 * v + 3], Z[v + 1], q) && cb(p[0], p[1], q[0], q[1]) === false) return;
+      const Q = B.ppos, QZ = B.pz;
+      for (let v = 0; v < Math.min(B.nP, 20000); v++) if (tr(Q[2 * v], Q[2 * v + 1], QZ[v], p) && cb(p[0], p[1], p[0], p[1]) === false) return;
+    }
+    const ts = E.ts.a[id], tc = E.tc.a[id], X = this.TX;
+    for (let t = ts; t < ts + tc; t++) {
+      // yazı: taban çizgisini parça gibi ele al
+      const h = X.h.a[t], r = X.r.a[t], L = h * 0.62 * Math.max(1, this.TS[t].length) * (X.wf.a[t] || 1);
+      if (cam.project(X.x.a[t], X.y.a[t], X.z.a[t], p) && cam.project(X.x.a[t] + L * Math.cos(r), X.y.a[t] + L * Math.sin(r), X.z.a[t], q) && cb(p[0], p[1], q[0], q[1]) === false) return;
+    }
+  }
+  pickScreen(sx, sy, tol, cam) {
+    const E = this.E, fl = E.flags.a, n = this.nEnt, r = [0, 0, 0, 0];
+    let best = -1, bd = tol;
+    for (let id = 0; id < n; id++) {
+      if (fl[id] & F_DEL || !this.layerVis[E.layer.a[id]]) continue;
+      const R = this.screenRect(id, cam, r);
+      if (R && (sx < R[0] - bd || sx > R[2] + bd || sy < R[1] - bd || sy > R[3] + bd)) continue;
+      this.eachScreenSeg(id, cam, (x1, y1, x2, y2) => {
+        const d = segDist(sx, sy, x1, y1, x2, y2);
+        if (d < bd) { bd = d; best = id; if (d < 0.5) return false; }
+      });
+    }
+    return best;
+  }
+  boxSelectScreen(x0, y0, x1, y1, window, cam) {
+    const E = this.E, fl = E.flags.a, n = this.nEnt, r = [0, 0, 0, 0], out = [];
+    for (let id = 0; id < n; id++) {
+      if (fl[id] & F_DEL || !this.layerVis[E.layer.a[id]]) continue;
+      const R = this.screenRect(id, cam, r);
+      if (!R) continue;
+      if (R[2] < x0 || R[0] > x1 || R[3] < y0 || R[1] > y1) continue;
+      const inside = R[0] >= x0 && R[2] <= x1 && R[1] >= y0 && R[3] <= y1;
+      if (inside) { out.push(id); continue; }
+      if (window) continue;
+      let hit = false;
+      this.eachScreenSeg(id, cam, (a, b, c, d) => { if (segRect(a, b, c, d, x0, y0, x1, y1)) { hit = true; return false; } });
+      if (hit) out.push(id);
+    }
+    return out;
+  }
+
+  // Yakalama. modes: {end, mid, near}. Dönüş: {p:[x,y,z], kind:'end'|'mid'|'near'} ya da null
+  snap(x, y, tol, modes) {
+    modes = modes || { end: true };
+    let best = null, bd = tol, bk = 9;
+    const E = this.E, b = E.bb.a, fl = E.flags.a;
+    // öncelik: uç(0) > orta(1) > yakın(2); daha öncelikli tür biraz daha uzakta olsa bile tercih edilir
+    const test = (px, py, pz, k) => {
+      const d = Math.hypot(px - x, py - y);
+      if (d > tol) return;
+      if (k < bk ? d < tol : (k === bk && d < bd)) { bd = d; bk = k; best = { p: [px, py, pz], kind: k === 0 ? 'end' : k === 1 ? 'mid' : 'near' }; }
+    };
+    const segTests = (x1, y1, z1, x2, y2, z2) => {
+      if (modes.end) { test(x1, y1, z1, 0); test(x2, y2, z2, 0); }
+      if (modes.mid) test((x1 + x2) / 2, (y1 + y2) / 2, (z1 + z2) / 2, 1);
+      if (modes.near && bk > 1) {
+        const dx = x2 - x1, dy = y2 - y1, l2 = dx * dx + dy * dy;
+        let t = l2 > 0 ? ((x - x1) * dx + (y - y1) * dy) / l2 : 0; t = t < 0 ? 0 : t > 1 ? 1 : t;
+        test(x1 + t * dx, y1 + t * dy, z1 + t * (z2 - z1), 2);
+      }
+    };
+    let budget = 4000;
+    this.grid.query(x - tol, y - tol, x + tol, y + tol, (id) => {
+      if (budget <= 0 || (fl[id] & F_DEL) || !this.layerVis[E.layer.a[id]]) return;
+      if (x < b[4 * id] - tol || x > b[4 * id + 2] + tol || y < b[4 * id + 1] - tol || y > b[4 * id + 3] + tol) return;
+      budget--;
+      const ch = this.chunks[E.chunk.a[id]], vs = E.vs.a[id], vc = E.vc.a[id];
+      if (ch && vc) {
+        if (fl[id] & F_POINTS) { const P = ch.ppos, Z = ch.pz; for (let v = vs; v < vs + vc; v++) test(P[2 * v], P[2 * v + 1], Z[v], 0); }
+        else {
+          const P = ch.pos, Z = ch.z;
+          for (let v = vs; v < vs + vc; v += 2) segTests(P[2 * v], P[2 * v + 1], Z[v], P[2 * v + 2], P[2 * v + 3], Z[v + 1]);
+        }
+      }
+      const is = E.is.a[id], ic = E.ic.a[id];
+      for (let k = is; k < is + ic; k++) {
+        const B = this.blocks[this.IN.blk.a[k]]; if (!B) continue;
+        const s = this.IN.slot.a[k], f = B.f.a, o = s * 8, sz = B.fz.a[2 * s], tz = B.fz.a[2 * s + 1];
+        if (modes.end) test(f[o + 2], f[o + 5], tz, 0);
+        if (B.pos && B.nV < 20000) {
+          const P = B.pos, Z = B.z;
+          const X = (v) => f[o] * P[2 * v] + f[o + 1] * P[2 * v + 1] + f[o + 2], Y = (v) => f[o + 3] * P[2 * v] + f[o + 4] * P[2 * v + 1] + f[o + 5];
+          const fz = this.flatBlocks ? 0 : sz;
+          for (let v = 0; v < B.nV; v += 2) segTests(X(v), Y(v), fz * Z[v] + tz, X(v + 1), Y(v + 1), fz * Z[v + 1] + tz);
+        }
+      }
+      if (modes.end) { const ts = E.ts.a[id], tc = E.tc.a[id]; for (let t = ts; t < ts + tc; t++) test(this.TX.x.a[t], this.TX.y.a[t], this.TX.z.a[t], 0); }
+    });
+    return best;
+  }
+  // Varlığın toplam uzunluğu (çizgi parçaları, plan düzleminde)
+  length(id) {
+    const E = this.E, ch = this.chunks[E.chunk.a[id]], vs = E.vs.a[id], vc = E.vc.a[id];
+    if (!ch || !vc || (E.flags.a[id] & F_POINTS)) return 0;
+    let L = 0; const P = ch.pos;
+    for (let v = vs; v < vs + vc; v += 2) L += Math.hypot(P[2 * v + 2] - P[2 * v], P[2 * v + 3] - P[2 * v + 1]);
+    return L;
+  }
+  // Kapalı bir çizgi zinciri ise plan alanı (değilse null)
+  area(id) {
+    const E = this.E, ch = this.chunks[E.chunk.a[id]], vs = E.vs.a[id], vc = E.vc.a[id];
+    const t = E.type.a[id];
+    if (!ch || vc < 6 || (E.flags.a[id] & F_POINTS)) return null;
+    if (t !== 3 && t !== 5 && t !== 6 && t !== 7 && t !== 8) return null; // CIRCLE, ELLIPSE, LWPOLYLINE, POLYLINE, SPLINE
+    const P = ch.pos, e = vs + vc - 1;
+    const tol = 1e-6 * (1 + Math.abs(P[2 * vs]) + Math.abs(P[2 * vs + 1]));
+    if (Math.abs(P[2 * e] - P[2 * vs]) > tol || Math.abs(P[2 * e + 1] - P[2 * vs + 1]) > tol) return null;
+    for (let v = vs + 1; v < e; v += 2) if (Math.abs(P[2 * v] - P[2 * v + 2]) > tol || Math.abs(P[2 * v + 1] - P[2 * v + 3]) > tol) return null; // zincir değil
+    let A = 0;
+    for (let v = vs; v < vs + vc; v += 2) A += P[2 * v] * P[2 * v + 3] - P[2 * v + 2] * P[2 * v + 1];
+    return Math.abs(A) / 2;
+  }
+}
+
+function segDist(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1, dy = y2 - y1, l2 = dx * dx + dy * dy;
+  let t = l2 > 0 ? ((px - x1) * dx + (py - y1) * dy) / l2 : 0;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+function segRect(x1, y1, x2, y2, rx0, ry0, rx1, ry1) {
+  // Liang–Barsky
+  let t0 = 0, t1 = 1; const dx = x2 - x1, dy = y2 - y1;
+  const p = [-dx, dx, -dy, dy], q = [x1 - rx0, rx1 - x1, y1 - ry0, ry1 - y1];
+  for (let i = 0; i < 4; i++) {
+    if (p[i] === 0) { if (q[i] < 0) return false; }
+    else { const r = q[i] / p[i]; if (p[i] < 0) { if (r > t1) return false; if (r > t0) t0 = r; } else { if (r < t0) return false; if (r < t1) t1 = r; } }
+  }
+  return true;
+}
+
+// Düzgün ızgara: küçük varlıklar merkez hücresine, büyükler ayrı listeye; taşınan/yeni varlıklar 'dyn' kümesinde
+class SpatialGrid {
+  constructor(store) {
+    this.s = store;
+    const n = store.nEnt, b = store.E.bb.a, fl = store.E.flags.a;
+    const ext = store.ext;
+    const w = Math.max(ext[2] - ext[0], 1e-9), h = Math.max(ext[3] - ext[1], 1e-9);
+    const target = Math.max(16, Math.min(2048, Math.ceil(Math.sqrt(n) * 1.5)));
+    let cs = Math.max(w, h) / target;
+    // aykırı uzak nesneler varsa yoğun görünüme göre hücre boyutu seç
+    const v = store.view0; if (v) cs = Math.min(cs, Math.max(v[2] - v[0], v[3] - v[1]) / target);
+    let nx = Math.ceil(w / cs) + 1, ny = Math.ceil(h / cs) + 1;
+    while (nx * ny > 8e6) { cs *= 1.5; nx = Math.ceil(w / cs) + 1; ny = Math.ceil(h / cs) + 1; }
+    this.x0 = ext[0]; this.y0 = ext[1]; this.cs = cs; this.nx = nx; this.ny = ny;
+    const cell = new Int32Array(n).fill(-1);
+    const cnt = new Uint32Array(nx * ny + 1);
+    const large = [];
+    for (let i = 0; i < n; i++) {
+      if (fl[i] & F_DEL) continue;
+      const a0 = b[4 * i], a1 = b[4 * i + 1], a2 = b[4 * i + 2], a3 = b[4 * i + 3];
+      if (!(a0 <= a2)) continue;
+      if (a2 - a0 > cs || a3 - a1 > cs) { large.push(i); continue; }
+      const cx = Math.min(nx - 1, Math.floor(((a0 + a2) / 2 - this.x0) / cs)), cy = Math.min(ny - 1, Math.floor(((a1 + a3) / 2 - this.y0) / cs));
+      const c = cy * nx + cx; cell[i] = c; cnt[c + 1]++;
+    }
+    for (let c = 0; c < nx * ny; c++) cnt[c + 1] += cnt[c];
+    const ids = new Uint32Array(cnt[nx * ny]);
+    const pos = cnt.slice(0, nx * ny);
+    for (let i = 0; i < n; i++) { const c = cell[i]; if (c >= 0) ids[pos[c]++] = i; }
+    this.off = cnt; this.ids = ids; this.large = Uint32Array.from(large);
+  }
+  query(x0, y0, x1, y1, cb) {
+    const fl = this.s.E.flags.a, cs = this.cs;
+    let cx0 = Math.floor((x0 - this.x0) / cs) - 1, cx1 = Math.floor((x1 - this.x0) / cs) + 1;
+    let cy0 = Math.floor((y0 - this.y0) / cs) - 1, cy1 = Math.floor((y1 - this.y0) / cs) + 1;
+    cx0 = Math.max(0, cx0); cy0 = Math.max(0, cy0); cx1 = Math.min(this.nx - 1, cx1); cy1 = Math.min(this.ny - 1, cy1);
+    for (let cy = cy0; cy <= cy1; cy++) {
+      for (let cx = cx0; cx <= cx1; cx++) {
+        const c = cy * this.nx + cx;
+        for (let k = this.off[c]; k < this.off[c + 1]; k++) { const id = this.ids[k]; if (!(fl[id] & F_DYN)) cb(id); }
+      }
+    }
+    for (let k = 0; k < this.large.length; k++) { const id = this.large[k]; if (!(fl[id] & F_DYN)) cb(id); }
+    for (const id of this.s.dyn) cb(id);
+  }
+}
