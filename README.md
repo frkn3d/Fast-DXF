@@ -2,7 +2,7 @@
 
 Büyük DXF dosyalarını (1 GB ve üzeri) açmak, 2B/3B gezmek, düzenlemek ve farklı formatlarda kaydetmek için kurulum gerektirmeyen bir araç.
 
-Sürüm: **0.1.10**. Tüm sürüm notları uygulamada üst çubuktaki sürüm düğmesinde (Ayarlar'ın solunda) ve `js/changelog.js` dosyasında.
+Sürüm: **0.1.11**. Tüm sürüm notları uygulamada üst çubuktaki sürüm düğmesinde (Ayarlar'ın solunda) ve `js/changelog.js` dosyasında.
 
 ## Başlatma
 
@@ -46,7 +46,7 @@ Sürüm: **0.1.10**. Tüm sürüm notları uygulamada üst çubuktaki sürüm d�
 - Çizilmekte olan nesnenin önceki noktaları kendiliğinden hizalanır (ör. dördüncü köşeyi ilk köşenin hizasına koymak için beklemeye gerek yok).
 
 ### Dinamik giriş: uzunluk ve açı
-- Çizerken imlecin yanında iki alan görünür: önceki nokta varken **uzunluk** ve **açı** (X ekseninden saat yönü tersine), ilk noktada **X** ve **Y**. Etkin alan mavi çerçeveli ve etiketlidir; altındaki ipucu yazılanın hangi alana gittiğini ve Tab'ın nereye geçireceğini söyler. Hiza etiketi imlecin üstünde, alanlar altında durur.
+- Çizerken imlecin yanında iki alan görünür: önceki nokta varken **uzunluk** ve **açı** (X ekseninden saat yönü tersine), ilk noktada **X** ve **Y**. Uzunluk alanı |—|, açı alanı ∠ simgesiyle gösterilir; etkin alan mavi çerçeveli ve yanıp sönen imleçlidir, kilitli alan sarı ve asma kilitlidir. Hiza etiketi imlecin üstünde, alanlar altında durur.
 - Sayı yazmak etkin alana girer. **Tab** yazılan değeri kilitler (sarı, asma kilitli) ve diğer alana geçer. Kilitli uzunluk ya da açı imleci kısıtlar; diğer değer fareden gelir.
 - **Enter / boşluk** noktayı koyar. **Geri tuşu** karakter siler, boş alanda kilidi açar. **Esc** alanları temizler.
 - Yalnız sayı yazıp Enter'a basmak aracın kendi anlamını korur: dairede yarıçap, döndürmede açı, ölçeklemede çarpan.

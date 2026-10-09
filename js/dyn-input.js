@@ -92,22 +92,29 @@ class DynInput {
     const m = this.mode(); if (!m || !this.app.mouseIn) return;
     const app = this.app, sx = app.mouse.sx, sy = app.mouse.sy, cur = this.live();
     const dec = (v, k) => { if (!isFinite(v)) return '—'; return (m === 'polar' && k === 1) ? (+v.toFixed(2)).toLocaleString('tr-TR') + '°' : fmtC(+v.toFixed(4)); };
-    const lab = m === 'xy' ? ['X', 'Y'] : ['Uzunluk', 'Açı'], dat = m === 'xy' ? ['X alanına', 'Y alanına'] : ['uzunluğa', 'açıya'];
+    const lab = m === 'xy' ? ['X', 'Y'] : null;   // kutupsal kipte yazı yerine simge: uzunluk |—|, açı ∠
+    const glyph = (k, x, y, col) => {
+      ctx.save(); ctx.strokeStyle = col; ctx.lineWidth = 1.4; ctx.lineCap = 'round'; ctx.beginPath();
+      if (k === 0) { ctx.moveTo(x, y - 4); ctx.lineTo(x, y + 4); ctx.moveTo(x + 12, y - 4); ctx.lineTo(x + 12, y + 4); ctx.moveTo(x, y); ctx.lineTo(x + 12, y); }
+      else { ctx.moveTo(x + 12, y + 5); ctx.lineTo(x, y + 5); ctx.lineTo(x + 9, y - 5); ctx.moveTo(x + 6.5, y + 5); ctx.arc(x, y + 5, 6.5, 0, -0.84, true); }
+      ctx.stroke(); ctx.restore();
+    };
     const blink = (performance.now() / 530 | 0) % 2 === 0;
     ctx.save(); ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
     let x0 = sx + 16, y = sy + 34;
-    if (x0 + 280 > this.R.W) x0 = sx - 296; if (y + 44 > this.R.H) y = sy - 66;
+    if (x0 + 240 > this.R.W) x0 = sx - 256; if (y + 26 > this.R.H) y = sy - 56;
     let x = x0;
     for (let k = 0; k < 2; k++) {
       const typed = this.f[k], locked = this.lock[k] !== null, act = this.i === k;
       const val = typed ? typed + (m === 'polar' && k === 1 ? '°' : '') : dec(locked ? this.lock[k] : cur[k], k);
-      ctx.font = '600 10px "Segoe UI", sans-serif'; const lw = ctx.measureText(lab[k]).width;
+      ctx.font = '600 10px "Segoe UI", sans-serif'; const lw = lab ? ctx.measureText(lab[k]).width : 12;
       ctx.font = '12px "Segoe UI", sans-serif'; const vw = ctx.measureText(val).width;
-      const w = Math.max(84, lw + vw + (locked ? 36 : 24));
+      const w = Math.max(lab ? 84 : 76, lw + vw + (locked ? 36 : 24));
       ctx.fillStyle = act ? 'rgba(13,22,38,.97)' : 'rgba(21,23,27,.86)'; ctx.fillRect(x, y, w, 22);
       ctx.strokeStyle = act ? '#4c9aff' : locked ? '#d29922' : 'rgba(255,255,255,.22)'; ctx.lineWidth = act ? 2 : 1;
       ctx.strokeRect(x + (act ? 1 : .5), y + (act ? 1 : .5), w - (act ? 2 : 1), act ? 20 : 21);
-      ctx.font = '600 10px "Segoe UI", sans-serif'; ctx.fillStyle = act ? '#8ab8ff' : '#7d8590'; ctx.fillText(lab[k], x + 7, y + 11.5);
+      const lc = act ? '#8ab8ff' : '#7d8590';
+      if (lab) { ctx.font = '600 10px "Segoe UI", sans-serif'; ctx.fillStyle = lc; ctx.fillText(lab[k], x + 7, y + 11.5); } else glyph(k, x + 7, y + 11, lc);
       const vx = x + 14 + lw;
       ctx.font = '12px "Segoe UI", sans-serif'; ctx.fillStyle = typed ? '#ffffff' : locked ? '#ffd166' : act ? '#e6edf3' : '#aeb6c2'; ctx.fillText(val, vx, y + 11.5);
       // etkin alanda yanıp sönen imleç: yazı varsa sonunda, yoksa değerin önünde
@@ -118,11 +125,6 @@ class DynInput {
       }
       x += w + 4;
     }
-    // ipucu: yazılanın nereye gittiği ve Tab'ın ne yaptığı
-    const hint = 'Yazın → ' + lab[this.i] + ' · Tab: ' + (this.f[this.i] ? 'kilitle ve ' : '') + dat[1 - this.i] + ' geç';
-    ctx.font = '10px "Segoe UI", sans-serif'; const hw = ctx.measureText(hint).width + 10;
-    ctx.fillStyle = 'rgba(17,19,23,.78)'; ctx.fillRect(x0, y + 25, hw, 15);
-    ctx.fillStyle = '#aeb6c2'; ctx.fillText(hint, x0 + 5, y + 33);
     ctx.restore();
     // imleç yanıp sönsün: sahneyi her karede değil, yarım saniyede bir yeniden çiz
     clearTimeout(this._blinkT); this._blinkT = setTimeout(() => { if (this.mode()) this.R.request(); }, 530);

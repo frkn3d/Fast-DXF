@@ -4,6 +4,9 @@
 'use strict';
 
 const CHANGELOG = [
+  { v: '0.1.11', d: '2026-10-09', t: 'Sade dinamik giriş', items: [
+    'Uzunluk / açı alanlarında yazı yerine simge: uzunluk |—|, açı ∠. Alanların altındaki açıklama satırı kaldırıldı.'
+  ] },
   { v: '0.1.10', d: '2026-10-09', t: 'İmleçte araç ikonu', items: [
     'Bir araç alındığında imlecin sağ üstünde o aracın ikonu görünür (çizgi, daire, ölçü, buda…); seçim, kaydırma ve yörüngede görünmez.',
     'İmleç çevresindeki bilgiler yeniden yerleştirildi: hiza etiketi ikonun sağında, yakalama etiketi ile uzunluk / açı alanları altta; üst üste binmez.'
