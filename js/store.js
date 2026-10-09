@@ -55,6 +55,7 @@ class Store {
     for (let i = 0; i < list.length; i++) {
       const L = list[i], old = this.layers[i];
       this.layers[i] = Object.assign(old || { count: 0 }, L);
+      if (this.layers[i].origName === undefined) this.layers[i].origName = L.name;
       if (!old) this.layerVis[i] = (L.off || L.frozen) ? 0 : 1;
     }
   }
@@ -86,7 +87,7 @@ class Store {
       B = this.blocks[idx] = {
         idx, name: '', bb: null, zb: null, pos: null, col: null, lay: null, ppos: null, pcol: null, play: null, z: null, pz: null, nV: 0, nP: 0,
         tpos: null, tz: null, tcol: null, tlay: null, nT: 0,
-        f: new GrowM(Float32Array, 64), fz: new GrowM(Float32Array, 16), c: new GrowM(Uint32Array, 16), n: 0, gl: null, instDirty: true, geomDirty: true
+        f: new GrowM(Float32Array, 64), fz: new GrowM(Float32Array, 16), fx: new GrowM(Float32Array, 32), c: new GrowM(Uint32Array, 16), n: 0, gl: null, instDirty: true, geomDirty: true
       };
     }
     return B;
@@ -95,12 +96,13 @@ class Store {
     const n = d.blk.length, IN = this.IN;
     for (let i = 0; i < n; i++) {
       const B = this.block(d.blk[i]);
-      B.f.ensure(8); B.c.ensure(2); B.fz.ensure(2);
+      B.f.ensure(8); B.c.ensure(2); B.fz.ensure(2); B.fx.ensure(4);
       const f = B.f.a, o = B.f.n;
       f[o] = d.m[6 * i]; f[o + 1] = d.m[6 * i + 1]; f[o + 2] = d.m[6 * i + 2];
       f[o + 3] = d.m[6 * i + 3]; f[o + 4] = d.m[6 * i + 4]; f[o + 5] = d.m[6 * i + 5];
       f[o + 6] = d.lay[i]; f[o + 7] = 1; B.f.n += 8;
       B.fz.a[B.fz.n++] = d.z[2 * i]; B.fz.a[B.fz.n++] = d.z[2 * i + 1];
+      for (let j = 0; j < 4; j++) B.fx.a[B.fx.n++] = d.x ? d.x[4 * i + j] : 0;
       B.c.a[B.c.n++] = d.col[i]; B.c.a[B.c.n++] = d.lcol[i];
       IN.blk.push(d.blk[i]); IN.slot.push(B.n); IN.ent.push(d.ent[i]);
       B.n++; B.instDirty = true;
@@ -126,6 +128,18 @@ class Store {
   }
 
   // ── yardımcılar
+  // Blok örneğinin 3×4 dönüşümü [a b q0 tx; c d q1 ty; q2 q3 sz tz] (göreli koordinat)
+  instM(B, s) {
+    const f = B.f.a, o = s * 8, x = B.fx.a, q = s * 4;
+    return [f[o], f[o + 1], x[q], f[o + 2], f[o + 3], f[o + 4], x[q + 1], f[o + 5], x[q + 2], x[q + 3], B.fz.a[2 * s], B.fz.a[2 * s + 1]];
+  }
+  setInstM(B, s, M) {
+    const f = B.f.a, o = s * 8, x = B.fx.a, q = s * 4;
+    f[o] = M[0]; f[o + 1] = M[1]; f[o + 2] = M[3]; f[o + 3] = M[4]; f[o + 4] = M[5]; f[o + 5] = M[7];
+    x[q] = M[2]; x[q + 1] = M[6]; x[q + 2] = M[8]; x[q + 3] = M[9];
+    B.fz.a[2 * s] = M[10]; B.fz.a[2 * s + 1] = M[11];
+    B.instDirty = true;
+  }
   bbox(id) { const b = this.E.bb.a; return [b[4 * id], b[4 * id + 1], b[4 * id + 2], b[4 * id + 3]]; }
   recomputeInsertBBox(id) {
     const E = this.E, b = E.bb.a;
@@ -134,15 +148,13 @@ class Store {
     for (let k = is; k < is + ic; k++) {
       const B = this.blocks[this.IN.blk.a[k]];
       if (!B) continue;
-      const s = this.IN.slot.a[k], sz = B.fz.a[2 * s], tz = B.fz.a[2 * s + 1];
-      if (B.zb) { const a = sz * B.zb[0] + tz, c = sz * B.zb[1] + tz; z0 = Math.min(z0, a, c); z1 = Math.max(z1, a, c); }
-      else { z0 = Math.min(z0, tz); z1 = Math.max(z1, tz); }
-      if (!B.bb) continue;
-      const f = B.f.a, o = s * 8;
-      for (let c = 0; c < 4; c++) {
-        const x = (c & 1) ? B.bb[2] : B.bb[0], y = (c & 2) ? B.bb[3] : B.bb[1];
-        const X = f[o] * x + f[o + 1] * y + f[o + 2], Y = f[o + 3] * x + f[o + 4] * y + f[o + 5];
-        if (X < x0) x0 = X; if (X > x1) x1 = X; if (Y < y0) y0 = Y; if (Y > y1) y1 = Y;
+      const s = this.IN.slot.a[k], M = this.instM(B, s);
+      if (!B.bb) { z0 = Math.min(z0, M[11]); z1 = Math.max(z1, M[11]); continue; }
+      const zb = B.zb || [0, 0];
+      for (let c = 0; c < 8; c++) {
+        const x = (c & 1) ? B.bb[2] : B.bb[0], y = (c & 2) ? B.bb[3] : B.bb[1], z = (c & 4) ? zb[1] : zb[0];
+        const X = M[0] * x + M[1] * y + M[2] * z + M[3], Y = M[4] * x + M[5] * y + M[6] * z + M[7], Z = M[8] * x + M[9] * y + M[10] * z + M[11];
+        if (X < x0) x0 = X; if (X > x1) x1 = X; if (Y < y0) y0 = Y; if (Y > y1) y1 = Y; if (Z < z0) z0 = Z; if (Z > z1) z1 = Z;
       }
     }
     const ts = E.ts.a[id], tc = E.tc.a[id];
@@ -170,11 +182,11 @@ class Store {
     const is = E.is.a[id], ic = E.ic.a[id];
     for (let k = is; k < is + ic; k++) {
       const B = this.blocks[this.IN.blk.a[k]]; if (!B) continue;
-      const s = this.IN.slot.a[k], f = B.f.a, o = s * 8, sz = B.fz.a[2 * s], tz = B.fz.a[2 * s + 1];
-      if (!B.bb) { add(f[o + 2], f[o + 5], tz); continue; }
+      const M = this.instM(B, this.IN.slot.a[k]);
+      if (!B.bb) { add(M[3], M[7], M[11]); continue; }
       for (let c = 0; c < 8; c++) {
         const x = (c & 1) ? B.bb[2] : B.bb[0], y = (c & 2) ? B.bb[3] : B.bb[1], z = B.zb ? ((c & 4) ? B.zb[1] : B.zb[0]) : 0;
-        add(f[o] * x + f[o + 1] * y + f[o + 2], f[o + 3] * x + f[o + 4] * y + f[o + 5], sz * z + tz);
+        add(M[0] * x + M[1] * y + M[2] * z + M[3], M[4] * x + M[5] * y + M[6] * z + M[7], M[8] * x + M[9] * y + M[10] * z + M[11]);
       }
     }
     const ts = E.ts.a[id], tc = E.tc.a[id];
@@ -269,19 +281,21 @@ class Store {
     for (const id of ids) {
       if (fl[id] & F_DEL) continue;
       if (!this.layerVis[this.E.layer.a[id]]) continue;
+      if (mode !== 'remove' && this.layerLocked(this.E.layer.a[id])) continue;
       if (mode === 'remove' || (mode === 'toggle' && this.sel[id])) { this.sel[id] = 0; }
       else if (!this.sel[id]) { this.sel[id] = 1; this.selList.push(id); }
     }
     if (mode === 'remove' || mode === 'toggle') this.selList = this.selList.filter(id => this.sel[id]);
   }
 
+  layerLocked(li) { const L = this.layers[li]; return !!(L && L.locked); }
   // Ekrandaki bir noktaya en yakın varlık (tol: dünya birimi)
   pick(x, y, tol) {
     let best = -1, bd = tol;
     const E = this.E, b = E.bb.a, fl = E.flags.a;
     this.grid.query(x - tol, y - tol, x + tol, y + tol, (id) => {
       if (fl[id] & F_DEL) return;
-      if (!this.layerVis[E.layer.a[id]]) return;
+      if (!this.layerVis[E.layer.a[id]] || this.layerLocked(E.layer.a[id])) return;
       if (x < b[4 * id] - tol || x > b[4 * id + 2] + tol || y < b[4 * id + 1] - tol || y > b[4 * id + 3] + tol) return;
       const d = this.distTo(id, x, y, bd);
       if (d < bd) { bd = d; best = id; }
@@ -304,7 +318,13 @@ class Store {
     const is = E.is.a[id], ic = E.ic.a[id];
     for (let k = is; k < is + ic && best > lim * 0.01; k++) {
       const B = this.blocks[this.IN.blk.a[k]]; if (!B || !B.pos) continue;
-      const f = B.f.a, o = this.IN.slot.a[k] * 8;
+      const f = B.f.a, o = this.IN.slot.a[k] * 8, M = this.instM(B, this.IN.slot.a[k]);
+      if (M[2] || M[6]) {
+        // eğik (3B dönmüş) örnek: köşeleri dünyaya çevirip ölç
+        const P = B.pos, Z = B.z, X = (v) => M[0] * P[2 * v] + M[1] * P[2 * v + 1] + M[2] * Z[v] + M[3], Y = (v) => M[4] * P[2 * v] + M[5] * P[2 * v + 1] + M[6] * Z[v] + M[7];
+        for (let v = 0; v < B.nV; v += 2) { const dd = segDist(x, y, X(v), Y(v), X(v + 1), Y(v + 1)); if (dd < best) best = dd; }
+        continue;
+      }
       // noktayı blok yerel koordinatına çevir
       const a = f[o], bb = f[o + 1], tx = f[o + 2], c = f[o + 3], d = f[o + 4], ty = f[o + 5];
       const det = a * d - bb * c; if (Math.abs(det) < 1e-30) continue;
@@ -328,7 +348,7 @@ class Store {
     const out = [], E = this.E, b = E.bb.a, fl = E.flags.a;
     this.grid.query(x0, y0, x1, y1, (id) => {
       if (fl[id] & F_DEL) return;
-      if (!this.layerVis[E.layer.a[id]]) return;
+      if (!this.layerVis[E.layer.a[id]] || this.layerLocked(E.layer.a[id])) return;
       const a0 = b[4 * id], a1 = b[4 * id + 1], a2 = b[4 * id + 2], a3 = b[4 * id + 3];
       if (window) { if (a0 >= x0 && a2 <= x1 && a1 >= y0 && a3 <= y1) out.push(id); }
       else if (a2 >= x0 && a0 <= x1 && a3 >= y0 && a1 <= y1) {
@@ -382,9 +402,8 @@ class Store {
     const is = E.is.a[id], ic = E.ic.a[id];
     for (let k = is; k < is + ic; k++) {
       const B = this.blocks[this.IN.blk.a[k]]; if (!B || !B.pos) continue;
-      const s = this.IN.slot.a[k], f = B.f.a, o = s * 8, sz = B.fz.a[2 * s], tz = B.fz.a[2 * s + 1];
-      const fz = this.flatBlocks ? 0 : sz;
-      const tr = (lx, ly, lz, out) => cam.project(f[o] * lx + f[o + 1] * ly + f[o + 2], f[o + 3] * lx + f[o + 4] * ly + f[o + 5], fz * lz + tz, out);
+      const M = this.instM(B, this.IN.slot.a[k]), fl = this.flatBlocks;
+      const tr = (lx, ly, lz, out) => cam.project(M[0] * lx + M[1] * ly + M[2] * lz + M[3], M[4] * lx + M[5] * ly + M[6] * lz + M[7], fl ? M[11] : M[8] * lx + M[9] * ly + M[10] * lz + M[11], out);
       const P = B.pos, Z = B.z, lim = Math.min(B.nV, 40000);
       for (let v = 0; v < lim; v += 2) if (tr(P[2 * v], P[2 * v + 1], Z[v], p) && tr(P[2 * v + 2], P[2 * v + 3], Z[v + 1], q) && cb(p[0], p[1], q[0], q[1]) === false) return;
       const Q = B.ppos, QZ = B.pz;
@@ -401,7 +420,7 @@ class Store {
     const E = this.E, fl = E.flags.a, n = this.nEnt, r = [0, 0, 0, 0];
     let best = -1, bd = tol;
     for (let id = 0; id < n; id++) {
-      if (fl[id] & F_DEL || !this.layerVis[E.layer.a[id]]) continue;
+      if (fl[id] & F_DEL || !this.layerVis[E.layer.a[id]] || this.layerLocked(E.layer.a[id])) continue;
       const R = this.screenRect(id, cam, r);
       if (R && (sx < R[0] - bd || sx > R[2] + bd || sy < R[1] - bd || sy > R[3] + bd)) continue;
       this.eachScreenSeg(id, cam, (x1, y1, x2, y2) => {
@@ -414,7 +433,7 @@ class Store {
   boxSelectScreen(x0, y0, x1, y1, window, cam) {
     const E = this.E, fl = E.flags.a, n = this.nEnt, r = [0, 0, 0, 0], out = [];
     for (let id = 0; id < n; id++) {
-      if (fl[id] & F_DEL || !this.layerVis[E.layer.a[id]]) continue;
+      if (fl[id] & F_DEL || !this.layerVis[E.layer.a[id]] || this.layerLocked(E.layer.a[id])) continue;
       const R = this.screenRect(id, cam, r);
       if (!R) continue;
       if (R[2] < x0 || R[0] > x1 || R[3] < y0 || R[1] > y1) continue;
@@ -523,12 +542,13 @@ class Store {
       const is = E.is.a[id], ic = E.ic.a[id];
       for (let k = is; k < is + ic; k++) {
         const B = this.blocks[this.IN.blk.a[k]]; if (!B) continue;
-        const s = this.IN.slot.a[k], f = B.f.a, o = s * 8, sz = this.flatBlocks ? 0 : B.fz.a[2 * s], tz = B.fz.a[2 * s + 1];
-        offer(f[o + 2], f[o + 5], tz, 'ins');
+        const M = this.instM(B, this.IN.slot.a[k]), fl = this.flatBlocks;
+        offer(M[3], M[7], M[11], 'ins');
         if (B.pos && B.nV < 20000) {
           const P = B.pos, Z = B.z;
-          const X = (v) => f[o] * P[2 * v] + f[o + 1] * P[2 * v + 1] + f[o + 2], Y = (v) => f[o + 3] * P[2 * v] + f[o + 4] * P[2 * v + 1] + f[o + 5];
-          for (let v = 0; v < B.nV; v += 2) { const z1 = sz * Z[v] + tz, z2 = sz * Z[v + 1] + tz; offer(X(v), Y(v), z1, 'end'); offer(X(v + 1), Y(v + 1), z2, 'end'); seg(X(v), Y(v), z1, X(v + 1), Y(v + 1), z2, true); }
+          const X = (v) => M[0] * P[2 * v] + M[1] * P[2 * v + 1] + M[2] * Z[v] + M[3], Y = (v) => M[4] * P[2 * v] + M[5] * P[2 * v + 1] + M[6] * Z[v] + M[7];
+          const ZZ = (v) => fl ? M[11] : M[8] * P[2 * v] + M[9] * P[2 * v + 1] + M[10] * Z[v] + M[11];
+          for (let v = 0; v < B.nV; v += 2) { const z1 = ZZ(v), z2 = ZZ(v + 1); offer(X(v), Y(v), z1, 'end'); offer(X(v + 1), Y(v + 1), z2, 'end'); seg(X(v), Y(v), z1, X(v + 1), Y(v + 1), z2, true); }
         }
       }
       const ts = E.ts.a[id], tc = E.tc.a[id];

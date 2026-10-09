@@ -34,31 +34,39 @@ const Export = {
     // göreli dönüşüm → mutlak (orijin eklenmiş) koordinat dönüşümü
     const absT = (T) => {
       if (!T || core.xfIdentity(T)) return undefined;
+      if (T.length === 12) {
+        // M_abs = Öteleme(o) ∘ M ∘ Öteleme(−o)
+        const M = T.slice(); M[3] += o[0] - (M[0] * o[0] + M[1] * o[1]); M[7] += o[1] - (M[4] * o[0] + M[5] * o[1]); M[11] -= M[8] * o[0] + M[9] * o[1];
+        return M;
+      }
       const [a, b, c, d, e, f, zs, zt] = T;
       return [a, b, c, d, e + o[0] - (a * o[0] + b * o[1]), f + o[1] - (c * o[0] + d * o[1]), zs, zt];
     };
-    const toEd = (e) => {
+    // yeniden adlandırılmış katmanlardaki nesnelerin 8 kodu da yeni adla yazılmalı
+    const renamed = (li) => { const L = S.layers[li]; return !!(L && L.origName !== undefined && L.origName !== L.name); };
+    const toEd = (e, id) => {
       const r = {};
       const T = absT(e && e.T); if (T) r.T = T;
       if (e && e.aci !== undefined) r.aci = e.aci;
       if (e && e.layer !== undefined) r.layer = S.layers[e.layer].name;
+      else if (id !== undefined && renamed(S.E.layer.a[id])) r.layer = S.layers[S.E.layer.a[id]].name;
       return r;
     };
-    const changed = (e) => e && ((e.T && !core.xfIdentity(e.T)) || e.aci !== undefined || e.layer !== undefined);
-    return { toEd, changed };
+    const changed = (e, id) => (e && ((e.T && !core.xfIdentity(e.T)) || e.aci !== undefined || e.layer !== undefined)) || (id !== undefined && renamed(S.E.layer.a[id]));
+    return { toEd, changed, renamed };
   },
   async saveDXF(app, mode, keepIds) {
     const S = app.store, E = S.E, info = S.info;
     if (!S.file || !info) return;
-    const { toEd, changed } = this.editState(app);
+    const { toEd, changed, renamed } = this.editState(app);
     const ops = [], copies = [], news = [];
     const addNew = (id) => {
       const inf = S.newInfo.get(id), e = S.edits.get(id) || {};
-      if (inf.src !== undefined) copies.push({ fs: E.fs.a[inf.src], fe: E.fe.a[inf.src], ed: toEd(e) });
+      if (inf.src !== undefined) copies.push({ fs: E.fs.a[inf.src], fe: E.fe.a[inf.src], ed: toEd(e, id) });
       else if (inf.def) {
         const d = JSON.parse(JSON.stringify(inf.def));
         if (d.li !== undefined && d.layer === undefined) d.layer = S.layers[d.li].name;
-        news.push({ def: d, ed: toEd(e) });
+        news.push({ def: d, ed: toEd(e, id) });
       }
     };
     if (info.binary && (mode === 'full' ? S.edits.size > 0 : keepIds.some(id => (E.flags.a[id] & F_NEW) || changed(S.edits.get(id))))) {
@@ -69,7 +77,12 @@ const Export = {
       for (const [id, e] of S.edits) {
         if (E.flags.a[id] & F_NEW) continue;
         if (E.flags.a[id] & F_DEL) ops.push({ fs: E.fs.a[id], fe: E.fe.a[id], kind: 'del' });
-        else if (changed(e)) ops.push({ fs: E.fs.a[id], fe: E.fe.a[id], kind: 'patch', ed: toEd(e) });
+        else if (changed(e, id)) ops.push({ fs: E.fs.a[id], fe: E.fe.a[id], kind: 'patch', ed: toEd(e, id) });
+      }
+      // adı değişen katmanlardaki dokunulmamış nesneler
+      if (S.layers.some((L, i) => renamed(i))) {
+        const la = E.layer.a, fl = E.flags.a;
+        for (let id = 0; id < S.nEnt; id++) if (renamed(la[id]) && !(fl[id] & (F_NEW | F_DEL)) && !S.edits.has(id)) ops.push({ fs: E.fs.a[id], fe: E.fe.a[id], kind: 'patch', ed: toEd(null, id) });
       }
       for (const [id] of S.newInfo) if (!(E.flags.a[id] & F_DEL)) addNew(id);
     } else {
@@ -77,17 +90,18 @@ const Export = {
         if (E.flags.a[id] & F_DEL) continue;
         if (E.flags.a[id] & F_NEW) { addNew(id); continue; }
         const e = S.edits.get(id);
-        ops.push(changed(e) ? { fs: E.fs.a[id], fe: E.fe.a[id], kind: 'patch', ed: toEd(e) } : { fs: E.fs.a[id], fe: E.fe.a[id], kind: 'keep' });
+        ops.push(changed(e, id) ? { fs: E.fs.a[id], fe: E.fe.a[id], kind: 'patch', ed: toEd(e, id) } : { fs: E.fs.a[id], fe: E.fe.a[id], kind: 'keep' });
       }
     }
-    const newLayers = S.layers.filter(L => L && L.isNew).map(L => ({ name: L.name, aci: L.aci }));
-    if (mode === 'full' && !ops.length && !copies.length && !news.length && !newLayers.length && !S.isNew) {
+    const newLayers = S.layers.filter(L => L && L.isNew && !L.deleted).map(L => ({ name: L.name, aci: L.aci, locked: !!L.locked, frozen: !!L.frozen }));
+    const layerMods = S.layers.filter(L => L && !L.isNew && L.mod && L.fe > L.fs).map(L => ({ fs: L.fs, fe: L.fe, name: L.name, aci: L.aci, off: !!L.off, frozen: !!L.frozen, locked: !!L.locked, del: !!L.deleted, colorChanged: !!L.colorChanged }));
+    if (mode === 'full' && !ops.length && !copies.length && !news.length && !newLayers.length && !layerMods.length && !S.isNew) {
       if (!await app.confirm('Kaydedilecek değişiklik yok. Yine de dosyanın kopyası kaydedilsin mi?')) return;
     }
     const msg = {
       mode, encoding: info.encoding, eol: info.eol, version: info.version, owner: info.modelHandle,
       handseed: info.handseed, handseedHex: info.handseedHex, entStart: info.entStart, entEnd: info.entEnd, ops, copies, news,
-      newLayers, layerEnd: info.layerEnd === undefined ? -1 : info.layerEnd, layerTableHandle: info.layerTableHandle || ''
+      newLayers, layerMods, layerEnd: info.layerEnd === undefined ? -1 : info.layerEnd, layerTableHandle: info.layerTableHandle || ''
     };
     app.busy('DXF hazırlanıyor…');
     const w = spawnWorker(saveWorkerMain);
@@ -139,7 +153,7 @@ const Export = {
       for (let s = 0; s < B.n; s++) {
         const o = s * 8;
         if (f[o + 7] < 0.5) continue;
-        const a = f[o], b = f[o + 1], tx = f[o + 2], c = f[o + 3], d = f[o + 4], ty = f[o + 5], ilay = f[o + 6];
+        const a = f[o], b = f[o + 1], tx = f[o + 2], c = f[o + 3], d = f[o + 4], ty = f[o + 5], ilay = f[o + 6], q0 = B.fx.a[4 * s], q1 = B.fx.a[4 * s + 1];
         if (B.bb) {
           let X0 = Infinity, Y0 = Infinity, X1 = -Infinity, Y1 = -Infinity;
           for (let k = 0; k < 4; k++) { const x = (k & 1) ? B.bb[2] : B.bb[0], y = (k & 2) ? B.bb[3] : B.bb[1]; const X = a * x + b * y + tx, Y = c * x + d * y + ty; X0 = Math.min(X0, X); X1 = Math.max(X1, X); Y0 = Math.min(Y0, Y); Y1 = Math.max(Y1, Y); }
@@ -151,14 +165,14 @@ const Export = {
         for (let v = 0; v < B.nV; v += 2) {
           const l = L[v] === 65535 ? ilay : L[v]; if (!vis[l]) continue;
           const col = res(C[v]); if ((col >>> 24) === 0) continue;
-          const x1 = P[2 * v], y1 = P[2 * v + 1], x2 = P[2 * v + 2], y2 = P[2 * v + 3];
-          onSeg(a * x1 + b * y1 + tx, c * x1 + d * y1 + ty, a * x2 + b * y2 + tx, c * x2 + d * y2 + ty, col); await tick();
+          const x1 = P[2 * v], y1 = P[2 * v + 1], x2 = P[2 * v + 2], y2 = P[2 * v + 3], z1 = B.z[v], z2 = B.z[v + 1];
+          onSeg(a * x1 + b * y1 + q0 * z1 + tx, c * x1 + d * y1 + q1 * z1 + ty, a * x2 + b * y2 + q0 * z2 + tx, c * x2 + d * y2 + q1 * z2 + ty, col); await tick();
         }
         const Q = B.ppos;
         for (let v = 0; v < B.nP; v++) {
           const l = B.play[v] === 65535 ? ilay : B.play[v]; if (!vis[l]) continue;
           const x = Q[2 * v], y = Q[2 * v + 1];
-          onPt(a * x + b * y + tx, c * x + d * y + ty, res(B.pcol[v])); await tick();
+          onPt(a * x + b * y + q0 * B.pz[v] + tx, c * x + d * y + q1 * B.pz[v] + ty, res(B.pcol[v])); await tick();
         }
       }
     }
@@ -335,9 +349,9 @@ const Export = {
     const img = ctx.createImageData(Wp, Hp);
     for (let y = 0; y < Hp; y++) img.data.set(px.subarray((Hp - 1 - y) * Wp * 4, (Hp - y) * Wp * 4), y * Wp * 4);
     ctx.putImageData(img, 0, 0);
-    const savedOff = R.offset; R.offset = [0, 0]; R.dprT = 1;
+    const savedXf = R.xf; R.xf = [1, 0, 0, 1, 0, 0, 1, 0]; R.dprT = 1;
     R.drawTexts(ctx, cam, 300000, false);
-    R.dprT = undefined; R.offset = savedOff;
+    R.dprT = undefined; R.xf = savedXf;
     if (R.dark !== wasDark) R.setTheme(wasDark);
     const blob = await new Promise(res => cv.toBlob(res, 'image/png'));
     app.busy(null);

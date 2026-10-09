@@ -337,6 +337,7 @@ function DXFCore() {
       this.blockTextTotal = 0;
       this.cz = 0;                    // geçerli varlığın varsayılan Z değeri (kot)
       this.thick = 0;                 // geçerli varlığın kalınlığı (Z yönünde ekstrüzyon)
+      this.ocs = null;                // keyfi çıkış yönlü OCS → WCS (Ax, Ay, N; 9 sayı) — ±Z için null
       // Düzenlenen/yeni nesneleri yeniden üretmek için: hazır katman listesi ve sabit orijin
       if (opts.layers) for (const L of opts.layers) { const i = this.layerIdx(L.name); Object.assign(this.layers[i], { aci: L.aci, rgba: L.rgba, fromTable: true }); }
       if (opts.origin) { this.ox = opts.origin[0]; this.oy = opts.origin[1]; this.hasOrigin = true; }
@@ -357,15 +358,16 @@ function DXFCore() {
       }
       return i;
     }
-    addLayer(name, aci, flags, tc) {
+    addLayer(name, aci, flags, tc, fs, fe) {
       const i = this.layerIdx(name); const L = this.layers[i];
       L.name = name; L.aci = aci; L.flags = flags; L.fromTable = true;
+      if (fs !== undefined) { L.fs = fs; L.fe = fe; L.tc = tc >= 0; }
       L.off = aci < 0; L.frozen = (flags & 1) !== 0; L.locked = (flags & 4) !== 0;
       L.rgba = tc >= 0 ? trueToRgba(tc) : aciToRgba(aci);
       this.layersDirty = true;
     }
     postLayers() {
-      this.post('layers', this.layers.map(L => ({ name: L.name, aci: L.aci, rgba: L.rgba, off: L.off, frozen: L.frozen, locked: L.locked })));
+      this.post('layers', this.layers.map(L => ({ name: L.name, aci: L.aci, rgba: L.rgba, off: L.off, frozen: L.frozen, locked: L.locked, fs: L.fs, fe: L.fe, tc: !!L.tc })));
       this.layersDirty = false;
     }
 
@@ -413,7 +415,7 @@ function DXFCore() {
         const P = c.pos.a, CC = c.col.a, LL = c.lay.a, ZZ = c.z.a, bb = d.bb, zb = d.zb;
         for (let v = 0; v < nv; v++) {
           const x = P[2 * v], y = P[2 * v + 1];
-          const X = I.a * x + I.b * y + I.tx, Y = I.c * x + I.d * y + I.ty, Z = I.sz * ZZ[v] + I.tz;
+          const z = ZZ[v], X = I.a * x + I.b * y + I.q0 * z + I.tx, Y = I.c * x + I.d * y + I.q1 * z + I.ty, Z = I.q2 * x + I.q3 * y + I.sz * z + I.tz;
           d.pos.a[d.pos.n++] = X; d.pos.a[d.pos.n++] = Y; d.z.a[d.z.n++] = Z;
           if (Z < zb[0]) zb[0] = Z; if (Z > zb[1]) zb[1] = Z;
           if (X < bb[0]) bb[0] = X; if (Y < bb[1]) bb[1] = Y; if (X > bb[2]) bb[2] = X; if (Y > bb[3]) bb[3] = Y;
@@ -426,7 +428,7 @@ function DXFCore() {
         d.ppos.ensure(np * 2); d.pcol.ensure(np); d.play.ensure(np); d.pz.ensure(np);
         for (let v = 0; v < np; v++) {
           const x = c.ppos.a[2 * v], y = c.ppos.a[2 * v + 1];
-          const X = I.a * x + I.b * y + I.tx, Y = I.c * x + I.d * y + I.ty, Z = I.sz * c.pz.a[v] + I.tz;
+          const z = c.pz.a[v], X = I.a * x + I.b * y + I.q0 * z + I.tx, Y = I.c * x + I.d * y + I.q1 * z + I.ty, Z = I.q2 * x + I.q3 * y + I.sz * z + I.tz;
           d.ppos.a[d.ppos.n++] = X; d.ppos.a[d.ppos.n++] = Y; d.pz.a[d.pz.n++] = Z;
           if (Z < zb[0]) zb[0] = Z; if (Z > zb[1]) zb[1] = Z;
           const bb2 = d.bb; if (X < bb2[0]) bb2[0] = X; if (Y < bb2[1]) bb2[1] = Y; if (X > bb2[2]) bb2[2] = X; if (Y > bb2[3]) bb2[3] = Y;
@@ -440,7 +442,7 @@ function DXFCore() {
           d.tpos.ensure(nt * 2); d.tz.ensure(nt); d.tcol.ensure(nt); d.tlay.ensure(nt);
           for (let v = 0; v < nt; v++) {
             const x = c.tpos.a[2 * v], y = c.tpos.a[2 * v + 1];
-            const X = I.a * x + I.b * y + I.tx, Y = I.c * x + I.d * y + I.ty, Z = I.sz * c.tz.a[v] + I.tz;
+            const z = c.tz.a[v], X = I.a * x + I.b * y + I.q0 * z + I.tx, Y = I.c * x + I.d * y + I.q1 * z + I.ty, Z = I.q2 * x + I.q3 * y + I.sz * z + I.tz;
             d.tpos.a[d.tpos.n++] = X; d.tpos.a[d.tpos.n++] = Y; d.tz.a[d.tz.n++] = Z;
             const bb2 = d.bb; if (X < bb2[0]) bb2[0] = X; if (Y < bb2[1]) bb2[1] = Y; if (X > bb2[2]) bb2[2] = X; if (Y > bb2[3]) bb2[3] = Y;
             if (Z < d.zb[0]) d.zb[0] = Z; if (Z > d.zb[1]) d.zb[1] = Z;
@@ -456,7 +458,7 @@ function DXFCore() {
             let col = t.col; const f = col >>> 24;
             if (f === A_BYBLOCK) col = I.col; else if (f === A_LAYERCOL) col = I.lcol;
             d.texts.push({
-              x: I.a * t.x + I.b * t.y + I.tx, y: I.c * t.x + I.d * t.y + I.ty, z: I.sz * t.z + I.tz, h: t.h * sc, rot: t.rot + ang,
+              x: I.a * t.x + I.b * t.y + I.q0 * t.z + I.tx, y: I.c * t.x + I.d * t.y + I.q1 * t.z + I.ty, z: I.q2 * t.x + I.q3 * t.y + I.sz * t.z + I.tz, h: t.h * sc, rot: t.rot + ang,
               align: t.align, str: t.str, wf: t.wf, col, lay: t.lay === 65535 ? I.lay : t.lay
             });
           }
@@ -516,7 +518,7 @@ function DXFCore() {
         col: new Grow(Uint32Array, 4096), lay: new Grow(Uint16Array, 4096), ent: new Grow(Uint32Array, 4096), str: []
       };
       this.IN = {
-        blk: new Grow(Uint32Array, 4096), m: new Grow(Float32Array, 6 * 4096), z: new Grow(Float32Array, 2 * 4096), col: new Grow(Uint32Array, 4096),
+        blk: new Grow(Uint32Array, 4096), m: new Grow(Float32Array, 6 * 4096), z: new Grow(Float32Array, 2 * 4096), x: new Grow(Float32Array, 4 * 4096), col: new Grow(Uint32Array, 4096),
         lcol: new Grow(Uint32Array, 4096), lay: new Grow(Uint16Array, 4096), ent: new Grow(Uint32Array, 4096)
       };
     }
@@ -622,7 +624,12 @@ function DXFCore() {
     // kalınlıklı nesnelerde köşe çizgisi
     vert(x, y, z) { if (this.thick) this.seg0(x, y, x, y, z, z + this.thick); }
     seg0(x1, y1, x2, y2, z1, z2) {
-      const d = this.target;
+      const d = this.target, O = this.ocs;
+      if (O) {
+        const a1 = O[0] * x1 + O[3] * y1 + O[6] * z1, b1 = O[1] * x1 + O[4] * y1 + O[7] * z1, c1 = O[2] * x1 + O[5] * y1 + O[8] * z1;
+        const a2 = O[0] * x2 + O[3] * y2 + O[6] * z2, b2 = O[1] * x2 + O[4] * y2 + O[7] * z2, c2 = O[2] * x2 + O[5] * y2 + O[8] * z2;
+        x1 = a1; y1 = b1; z1 = c1; x2 = a2; y2 = b2; z2 = c2;
+      }
       if (d === null) {
         if (!this.hasOrigin) this.setOrigin(x1, y1);
         x1 -= this.ox; y1 -= this.oy; x2 -= this.ox; y2 -= this.oy;
@@ -654,7 +661,12 @@ function DXFCore() {
     }
     tri(x1, y1, z1, x2, y2, z2, x3, y3, z3) {
       if (!(isFinite(z1) && isFinite(z2) && isFinite(z3))) return;
-      const d = this.target;
+      const d = this.target, O = this.ocs;
+      if (O) {
+        const w = (x, y, z) => [O[0] * x + O[3] * y + O[6] * z, O[1] * x + O[4] * y + O[7] * z, O[2] * x + O[5] * y + O[8] * z];
+        const p1 = w(x1, y1, z1), p2 = w(x2, y2, z2), p3 = w(x3, y3, z3);
+        x1 = p1[0]; y1 = p1[1]; z1 = p1[2]; x2 = p2[0]; y2 = p2[1]; z2 = p2[2]; x3 = p3[0]; y3 = p3[1]; z3 = p3[2];
+      }
       const T = d === null ? this.ch : d;
       if (d === null) {
         if (!this.hasOrigin) this.setOrigin(x1, y1);
@@ -681,7 +693,8 @@ function DXFCore() {
     pt(x, y, z) {
       if (z === undefined) z = this.cz;
       if (!isFinite(z)) z = 0;
-      const d = this.target;
+      const d = this.target, O = this.ocs;
+      if (O) { const a = O[0] * x + O[3] * y + O[6] * z, b = O[1] * x + O[4] * y + O[7] * z; z = O[2] * x + O[5] * y + O[8] * z; x = a; y = b; }
       if (d === null) {
         if (!this.hasOrigin) this.setOrigin(x, y);
         x -= this.ox; y -= this.oy;
@@ -728,10 +741,11 @@ function DXFCore() {
     }
     // Blok referansı: dünya = M·yerel + t   (yerel koordinatlar blok taban noktasına göre)
     // Z: dünya = sz·z_yerel + tz
-    inst(bi, a, b, c, d, tx, ty, sz, tz) {
+    inst(bi, a, b, c, d, tx, ty, sz, tz, x4) {
       if (sz === undefined || !isFinite(sz)) sz = 1;
       if (tz === undefined || !isFinite(tz)) tz = 0;
       const D = this.target;
+      const q0 = x4 ? x4[0] : 0, q1 = x4 ? x4[1] : 0, q2 = x4 ? x4[2] : 0, q3 = x4 ? x4[3] : 0;
       if (D === null) {
         if (!this.hasOrigin) this.setOrigin(tx, ty);
         const rx = tx - this.ox, ry = ty - this.oy;
@@ -739,22 +753,20 @@ function DXFCore() {
         I.blk.push(bi); I.m.ensure(6);
         I.m.a[I.m.n++] = a; I.m.a[I.m.n++] = b; I.m.a[I.m.n++] = rx; I.m.a[I.m.n++] = c; I.m.a[I.m.n++] = d; I.m.a[I.m.n++] = ry;
         I.z.ensure(2); I.z.a[I.z.n++] = sz; I.z.a[I.z.n++] = tz;
+        I.x.ensure(4); I.x.a[I.x.n++] = q0; I.x.a[I.x.n++] = q1; I.x.a[I.x.n++] = q2; I.x.a[I.x.n++] = q3;
         I.col.push(this.cCol); I.lcol.push(this.cLcol); I.lay.push(this.cLay); I.ent.push(this.entCount);
         this.instCount++;
         const B = this.blocks[bi];
         if (B.defined && B.flat) {
           const bb = B.bb;
           if (isFinite(bb[0])) {
-            const e = this.ebb;
-            for (let k = 0; k < 4; k++) {
-              const x = (k & 1) ? bb[2] : bb[0], y = (k & 2) ? bb[3] : bb[1];
-              const X = a * x + b * y + rx, Y = c * x + d * y + ry;
+            const e = this.ebb, zb = B.zb[0] <= B.zb[1] ? B.zb : [0, 0];
+            for (let k = 0; k < 8; k++) {
+              const x = (k & 1) ? bb[2] : bb[0], y = (k & 2) ? bb[3] : bb[1], z = (k & 4) ? zb[1] : zb[0];
+              const X = a * x + b * y + q0 * z + rx, Y = c * x + d * y + q1 * z + ry, Z = q2 * x + q3 * y + sz * z + tz;
               if (X < e[0]) e[0] = X; if (X > e[2]) e[2] = X; if (Y < e[1]) e[1] = Y; if (Y > e[3]) e[3] = Y;
+              if (Z < this.ez0) this.ez0 = Z; if (Z > this.ez1) this.ez1 = Z;
             }
-          }
-          if (B.zb[0] <= B.zb[1]) {
-            const za = sz * B.zb[0] + tz, zc = sz * B.zb[1] + tz;
-            this.ez0 = Math.min(this.ez0, za, zc); this.ez1 = Math.max(this.ez1, za, zc);
           } else { this.ez0 = Math.min(this.ez0, tz); this.ez1 = Math.max(this.ez1, tz); }
           // bloğun yazılarını dünyaya aç
           if (B.texts.length && this.blockTextTotal < MAX_BLOCK_TEXTS) {
@@ -762,8 +774,8 @@ function DXFCore() {
             for (const t of B.texts) {
               let col = t.col; const f = col >>> 24;
               if (f === A_BYBLOCK) col = this.cCol; else if (f === A_LAYERCOL) col = this.cLcol;
-              const X = a * t.x + b * t.y + rx, Y = c * t.x + d * t.y + ry;
-              this.pushText(X, Y, sz * t.z + tz, t.h * sc, t.rot + ang, t.align, t.str, t.wf, col, t.lay === 65535 ? this.cLay : t.lay, this.entCount);
+              const X = a * t.x + b * t.y + q0 * t.z + rx, Y = c * t.x + d * t.y + q1 * t.z + ry;
+              this.pushText(X, Y, q2 * t.x + q3 * t.y + sz * t.z + tz, t.h * sc, t.rot + ang, t.align, t.str, t.wf, col, t.lay === 65535 ? this.cLay : t.lay, this.entCount);
               textBBox(X, Y, t.h * sc, t.rot + ang, t.align, t.str, t.wf, this.ebb);
             }
             this.blockTextTotal += B.texts.length;
@@ -773,7 +785,7 @@ function DXFCore() {
         if (I.blk.n >= INST_BATCH) this.flushInst();
       } else {
         if (D.paper) return;
-        D.inserts.push({ bi, a, b, c, d, tx: tx - D.bx, ty: ty - D.by, sz, tz: tz - D.bz, col: this.cCol, lcol: this.cLcol, lay: this.cLay });
+        D.inserts.push({ bi, a, b, c, d, tx: tx - D.bx, ty: ty - D.by, sz, tz: tz - D.bz, q0, q1, q2, q3, col: this.cCol, lcol: this.cLcol, lay: this.cLay });
       }
     }
 
@@ -865,6 +877,23 @@ function DXFCore() {
   const S_NONE = 0, S_HEADER = 1, S_TABLES = 2, S_BLOCKS = 3, S_ENT = 4, S_OTHER = 5;
   const DEG = Math.PI / 180;
 
+  // AutoCAD keyfi eksen algoritması: çıkış yönü N → OCS eksenleri [Ax, Ay, N] (9 sayı). N ±Z ise null (eski hızlı yol).
+  function arbAxis(nx, ny, nz) {
+    const l = Math.hypot(nx, ny, nz); if (!(l > 0)) return null;
+    nx /= l; ny /= l; nz /= l;
+    let ax, ay, az;
+    if (Math.abs(nx) < 1 / 64 && Math.abs(ny) < 1 / 64) { ax = nz; ay = 0; az = -nx; }   // Wy × N
+    else { ax = -ny; ay = nx; az = 0; }                                                // Wz × N
+    const la = Math.hypot(ax, ay, az); ax /= la; ay /= la; az /= la;
+    const bx = ny * az - nz * ay, by = nz * ax - nx * az, bz = nx * ay - ny * ax;      // N × Ax
+    return [ax, ay, az, bx, by, bz, nx, ny, nz];
+  }
+  function ocsOf(E) {
+    const nx = E.get(210, 0), ny = E.get(220, 0), nz = E.get(230, 1);
+    if (Math.abs(nx) < 1e-12 && Math.abs(ny) < 1e-12) return null;
+    return arbAxis(nx, ny, nz);
+  }
+
   class EntAcc { // tek varlığın grup kodları
     constructor() { this.codes = new Int16Array(4096); this.vals = new Float64Array(4096); this.strs = []; this.reset('', 0); }
     reset(type, fs) {
@@ -950,7 +979,7 @@ function DXFCore() {
       const E = this.E;
       if (this.sec === S_TABLES) {
         if (E.type === 'TABLE') { this.curTable = E.name.trim().toUpperCase(); if (this.curTable === 'LAYER') this.layerTableHandle = E.handle; }
-        else if (E.type === 'LAYER') this.B.addLayer(E.name, E.color === 256 ? 7 : E.color, E.get(70, 0) | 0, E.tcolor);
+        else if (E.type === 'LAYER') this.B.addLayer(E.name, E.color === 256 ? 7 : E.color, E.get(70, 0) | 0, E.tcolor, E.fs, off);
         else if (E.type === 'BLOCK_RECORD' && E.name.toUpperCase() === '*MODEL_SPACE') this.modelHandle = E.handle;
         return;
       }
@@ -983,7 +1012,8 @@ function DXFCore() {
         const p = this.pins; this.pins = null; this.emitInsert(p, E.fs);
       }
       if (t === 'POLYLINE') {
-        this.poly = { fs: E.fs, flags: E.get(70, 0) | 0, layer: E.layer, color: E.color, tcolor: E.tcolor, flip: E.get(230, 1) < 0,
+        const ocs = ocsOf(E);
+        this.poly = { fs: E.fs, flags: E.get(70, 0) | 0, layer: E.layer, color: E.color, tcolor: E.tcolor, flip: !ocs && E.get(230, 1) < 0, ocs,
           m: E.get(71, 0) | 0, n: E.get(72, 0) | 0, elev: E.get(30, 0), thick: E.get(39, 0), xs: [], ys: [], zs: [], bs: [], faces: [] };
         return;
       }
@@ -1003,6 +1033,7 @@ function DXFCore() {
       B.begin(T.POLYLINE, p.layer, p.color, p.tcolor);
       const is3d = (p.flags & (8 | 16 | 64)) !== 0;
       const xs = p.xs, ys = p.ys, zs = p.zs, n = xs.length;
+      if (!is3d && p.ocs) B.ocs = p.ocs;
       if (p.flip && !is3d) for (let i = 0; i < n; i++) xs[i] = -xs[i];
       B.cz = is3d ? 0 : (p.flip ? -p.elev : p.elev);
       if (!is3d && p.thick) B.thick = p.flip ? -p.thick : p.thick;
@@ -1040,6 +1071,7 @@ function DXFCore() {
         if (p.flip && !is3d) for (let i = 0; i < n; i++) bs[i] = -bs[i];
         B.poly(xs, ys, is3d ? null : bs, n, (p.flags & 1) !== 0, is3d ? zs : null);
       }
+      B.ocs = null;
       B.end(p.fs, fe);
     }
     textData(E, isAttrib) {
@@ -1056,7 +1088,12 @@ function DXFCore() {
         ha = hj > 2 ? 0 : hj; va = vj;
         if ((hj !== 0 || vj !== 0) && E.has(11)) { x = E.get(11, x); y = E.get(21, y); }
       }
-      if (E.get(230, 1) < 0) { x = -x; z = -z; rot = Math.PI - rot; }
+      const O = ocsOf(E);
+      if (O) {
+        const X = O[0] * x + O[3] * y + O[6] * z, Y = O[1] * x + O[4] * y + O[7] * z, Z = O[2] * x + O[5] * y + O[8] * z;
+        const c = Math.cos(rot), s = Math.sin(rot);
+        rot = Math.atan2(O[1] * c + O[4] * s, O[0] * c + O[3] * s); x = X; y = Y; z = Z;
+      } else if (E.get(230, 1) < 0) { x = -x; z = -z; rot = Math.PI - rot; }
       return { x, y, z, h, rot, align: ha + 4 * va, str, wf, layer: E.layer, color: E.color, tcolor: E.tcolor };
     }
     insertData(E) {
@@ -1064,7 +1101,7 @@ function DXFCore() {
         type: E.type === 'ACAD_TABLE' ? T.ACAD_TABLE : T.INSERT, fs: E.fs, name: E.name, layer: E.layer, color: E.color, tcolor: E.tcolor,
         px: E.get(10, 0), py: E.get(20, 0), pz: E.get(30, 0), sx: E.get(41, 1), sy: E.get(42, 1), sz: E.get(43, 1), rot: E.get(50, 0) * DEG,
         cols: Math.max(1, E.get(70, 1) | 0), rows: Math.max(1, E.get(71, 1) | 0), cs: E.get(44, 0), rs: E.get(45, 0),
-        flip: E.get(230, 1) < 0, attribs: []
+        flip: E.get(230, 1) < 0, ocs: ocsOf(E), attribs: []
       };
     }
     emitInsert(p, fe) {
@@ -1077,7 +1114,12 @@ function DXFCore() {
       for (let r = 0; r < rows; r++) for (let k = 0; k < cols; k++) {
         const ox = k * p.cs, oy = r * p.rs;
         let px = p.px + c * ox - s * oy, py = p.py + s * ox + c * oy;
-        if (p.flip) B.inst(bi, -a, -b, cc, d, -px, py, -p.sz, -p.pz);
+        if (p.ocs) {
+          // WCS = O · [a b 0 px; cc d 0 py; 0 0 sz pz]
+          const O = p.ocs, L = [[a, b, 0, px], [cc, d, 0, py], [0, 0, p.sz, p.pz]], M = [];
+          for (let i = 0; i < 3; i++) { M.push([]); for (let j = 0; j < 4; j++) M[i].push(O[i] * L[0][j] + O[3 + i] * L[1][j] + O[6 + i] * L[2][j]); }
+          B.inst(bi, M[0][0], M[0][1], M[1][0], M[1][1], M[0][3], M[1][3], M[2][2], M[2][3], [M[0][2], M[1][2], M[2][0], M[2][1]]);
+        } else if (p.flip) B.inst(bi, -a, -b, cc, d, -px, py, -p.sz, -p.pz);
         else B.inst(bi, a, b, cc, d, px, py, p.sz, p.pz);
       }
       for (const t of p.attribs) {
@@ -1096,11 +1138,15 @@ function DXFCore() {
       B.end(p.fs, fe);
     }
     emitSimple(E, fe) {
+      const t = E.type;
+      if (OCS_DRAW.has(t)) { const O = ocsOf(E); if (O) { this.B.ocs = O; try { this.emitSimple0(E, fe, false); } finally { this.B.ocs = null; } return; } }
+      this.emitSimple0(E, fe, E.get(230, 1) < 0);
+    }
+    emitSimple0(E, fe, flip) {
       const B = this.B, t = E.type;
-      const flip = E.get(230, 1) < 0;
       const fx = flip ? -1 : 1;
       B.cz = fx * E.get(30, 0);   // OCS kotu (yansımış OCS'de Z ters)
-      const th = E.get(39, 0) * (E.get(230, 1) < 0 ? -1 : 1);  // kalınlık (çıkış yönünde)
+      const th = E.get(39, 0) * (flip ? -1 : 1);  // kalınlık (çıkış yönünde)
       switch (t) {
         case 'LINE': {
           B.begin(T.LINE, E.layer, E.color, E.tcolor); B.thick = th;
@@ -1129,17 +1175,15 @@ function DXFCore() {
         }
         case 'ELLIPSE': {
           B.begin(T.ELLIPSE, E.layer, E.color, E.tcolor);
-          B.cz = E.get(30, 0);
-          const cx = E.get(10, 0), cy = E.get(20, 0), mx = E.get(11, 1), my = E.get(21, 0), ratio = E.get(40, 1);
+          const cx = E.get(10, 0), cy = E.get(20, 0), cz = E.get(30, 0), mx = E.get(11, 1), my = E.get(21, 0), mz = E.get(31, 0), ratio = E.get(40, 1);
           let t0 = E.get(41, 0), t1 = E.get(42, 2 * Math.PI);
           let sw = t1 - t0; while (sw <= 0) sw += 2 * Math.PI; if (sw > 2 * Math.PI + 1e-9) sw = 2 * Math.PI;
-          const nx = flip ? my * ratio : -my * ratio, ny = flip ? -mx * ratio : mx * ratio;
+          let Nx = E.get(210, 0), Ny = E.get(220, 0), Nz = E.get(230, 1); const nl = Math.hypot(Nx, Ny, Nz) || 1; Nx /= nl; Ny /= nl; Nz /= nl;
+          const nx = (Ny * mz - Nz * my) * ratio, ny = (Nz * mx - Nx * mz) * ratio, nz = (Nx * my - Ny * mx) * ratio;
           const n = Math.max(4, Math.ceil(sw / (2 * Math.PI) * B.SEG));
-          let px = cx + mx * Math.cos(t0) + nx * Math.sin(t0), py = cy + my * Math.cos(t0) + ny * Math.sin(t0);
-          for (let i = 1; i <= n; i++) {
-            const a = t0 + sw * i / n, x = cx + mx * Math.cos(a) + nx * Math.sin(a), y = cy + my * Math.cos(a) + ny * Math.sin(a);
-            B.seg(px, py, x, y); px = x; py = y;
-          }
+          const P = (a) => [cx + mx * Math.cos(a) + nx * Math.sin(a), cy + my * Math.cos(a) + ny * Math.sin(a), cz + mz * Math.cos(a) + nz * Math.sin(a)];
+          let q = P(t0);
+          for (let i = 1; i <= n; i++) { const r = P(t0 + sw * i / n); B.seg(q[0], q[1], r[0], r[1], q[2], r[2]); q = r; }
           break;
         }
         case 'LWPOLYLINE': {
@@ -1399,6 +1443,7 @@ function DXFCore() {
   function codeStr(c) { const s = String(c); return s.length >= 3 ? s : ('   ' + s).slice(-3); }
 
   const OCS_TYPES = new Set(['CIRCLE', 'ARC', 'LWPOLYLINE', 'TEXT', 'ATTRIB', 'ATTDEF', 'INSERT', 'HATCH', 'SOLID', 'TRACE', 'SHAPE', 'VERTEX', 'POLYLINE']);
+  const OCS_DRAW = new Set(['CIRCLE', 'ARC', 'LWPOLYLINE', 'HATCH', 'SOLID', 'TRACE', 'SHAPE']);   // geometrisi Builder.ocs ile çevrilenler
   // Dönüşümde koordinat sonekleri (10..18 → k): P = nokta, V = vektör (öteleme yok)
   const XF_KIND = {
     LINE: { P: [0, 1] }, POINT: { P: [0] }, CIRCLE: { P: [0] }, ARC: { P: [0] }, ELLIPSE: { P: [0], V: [1] }, LWPOLYLINE: { P: [0] },
@@ -1415,7 +1460,11 @@ function DXFCore() {
   }
   // Çıkış yönü −Z olan (yansımış) OCS çerçevesinde aynı dönüşüm
   function xfConj(X) { return { a: X.a, b: -X.b, c: -X.c, d: X.d, e: -X.e, f: X.f, zs: X.zs, zt: -X.zt, sc: X.sc, mir: X.mir, th: -X.th }; }
-  function xfIdentity(T) { return !T || (T[0] === 1 && T[1] === 0 && T[2] === 0 && T[3] === 1 && T[4] === 0 && T[5] === 0 && T[6] === 1 && T[7] === 0); }
+  function xfIdentity(T) {
+    if (!T) return true;
+    if (T.length === 12) return T[0] === 1 && T[1] === 0 && T[2] === 0 && T[3] === 0 && T[4] === 0 && T[5] === 1 && T[6] === 0 && T[7] === 0 && T[8] === 0 && T[9] === 0 && T[10] === 1 && T[11] === 0;
+    return T[0] === 1 && T[1] === 0 && T[2] === 0 && T[3] === 1 && T[4] === 0 && T[5] === 0 && T[6] === 1 && T[7] === 0;
+  }
   const norm360 = (a) => { a %= 360; if (a < 0) a += 360; return Math.abs(a - 360) < 1e-9 ? 0 : a; };
   function xfAng(X, deg) { return norm360(X.th * R2D + (X.mir ? -deg : deg)); }
   // Aynalamada yazı okunur kalsın (AutoCAD MIRRTEXT=0): yansıyan doğrultunun iki yönünden asıl açıya yakın olanı
@@ -1426,13 +1475,348 @@ function DXFCore() {
   }
   // T = A∘B (önce B, sonra A)
   function xfCompose(A, B) {
+    if (A.length === 12 || B.length === 12) return mMul(toM(A), toM(B));
     return [A[0] * B[0] + A[1] * B[2], A[0] * B[1] + A[1] * B[3], A[2] * B[0] + A[3] * B[2], A[2] * B[1] + A[3] * B[3],
       A[0] * B[4] + A[1] * B[5] + A[4], A[2] * B[4] + A[3] * B[5] + A[5], A[6] * B[6], A[6] * B[7] + A[7]];
   }
   function xfInverse(T) {
+    if (T.length === 12) return mInv(T);
     const [a, b, c, d, e, f, zs, zt] = T, det = a * d - b * c;
     const ia = d / det, ib = -b / det, ic = -c / det, id = a / det;
     return [ia, ib, ic, id, -(ia * e + ib * f), -(ic * e + id * f), 1 / zs, -zt / zs];
+  }
+
+  // ───────── 3B afin dönüşüm ─────────
+  // M = [m00,m01,m02,tx, m10,m11,m12,ty, m20,m21,m22,tz] (satır öncelikli 3×4). Eski biçim T (8 sayı) her yerde kabul edilir.
+  function toM(T) { return T.length === 12 ? T.slice() : [T[0], T[1], 0, T[4], T[2], T[3], 0, T[5], 0, 0, T[6], T[7]]; }
+  function mPlanar(M) { return M[2] === 0 && M[6] === 0 && M[8] === 0 && M[9] === 0; }
+  function mTo8(M) { return [M[0], M[1], M[4], M[5], M[3], M[7], M[10], M[11]]; }
+  // 2×2 benzerlik mi (dönme + eşit ölçek, aynalı olabilir)
+  function sim2(a, b, c, d) {
+    const e = 1e-9 * Math.max(Math.abs(a), Math.abs(b), Math.abs(c), Math.abs(d), 1e-300);
+    return (Math.abs(a - d) <= e && Math.abs(b + c) <= e) || (Math.abs(a + d) <= e && Math.abs(b - c) <= e);
+  }
+  function mMul(A, B) {
+    const R = new Array(12);
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 4; j++)
+      R[4 * i + j] = A[4 * i] * B[j] + A[4 * i + 1] * B[4 + j] + A[4 * i + 2] * B[8 + j] + (j === 3 ? A[4 * i + 3] : 0);
+    return R;
+  }
+  function mDet(M) { return M[0] * (M[5] * M[10] - M[6] * M[9]) - M[1] * (M[4] * M[10] - M[6] * M[8]) + M[2] * (M[4] * M[9] - M[5] * M[8]); }
+  function mInv(M) {
+    const d = mDet(M), [a, b, c, , e, f, g, , h, i, j] = M;
+    const I = [(f * j - g * i) / d, (c * i - b * j) / d, (b * g - c * f) / d, 0,
+      (g * h - e * j) / d, (a * j - c * h) / d, (c * e - a * g) / d, 0,
+      (e * i - f * h) / d, (b * h - a * i) / d, (a * f - b * e) / d, 0];
+    for (let r = 0; r < 3; r++) I[4 * r + 3] = -(I[4 * r] * M[3] + I[4 * r + 1] * M[7] + I[4 * r + 2] * M[11]);
+    return I;
+  }
+  const v3 = {
+    dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+    cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+    len: (a) => Math.hypot(a[0], a[1], a[2]),
+    norm: (a) => { const l = Math.hypot(a[0], a[1], a[2]); return l > 0 ? [a[0] / l, a[1] / l, a[2] / l] : [0, 0, 1]; },
+    add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
+    mul: (a, k) => [a[0] * k, a[1] * k, a[2] * k]
+  };
+  // tam OCS ekseni (±Z dahil)
+  function ocsAxes(N) {
+    const n = v3.norm(N);
+    const ax = (Math.abs(n[0]) < 1 / 64 && Math.abs(n[1]) < 1 / 64) ? v3.norm(v3.cross([0, 1, 0], n)) : v3.norm(v3.cross([0, 0, 1], n));
+    return [ax, v3.norm(v3.cross(n, ax)), n];
+  }
+  // Grup kodu dizisine genel 3B afin dönüşüm uygula (dönme her eksende, eksen başına ölçek, aynalama)
+  function xformItems3D(items, M) {
+    const fmt = fmtNum, mk = (c, v) => ({ cs: codeStr(c), c, v });
+    const A = (p) => [M[0] * p[0] + M[1] * p[1] + M[2] * p[2], M[4] * p[0] + M[5] * p[1] + M[6] * p[2], M[8] * p[0] + M[9] * p[1] + M[10] * p[2]];
+    const P = (p) => { const r = A(p); return [r[0] + M[3], r[1] + M[7], r[2] + M[11]]; };
+    const tr = [M[3], M[7], M[11]];
+    // normal dönüşümü: kofaktör matrisi (A·a)×(A·b) = cof(A)·(a×b)
+    const cofN = (n) => { const a = A([1, 0, 0]), b = A([0, 1, 0]), c = A([0, 0, 1]); return v3.norm(v3.add(v3.add(v3.mul(v3.cross(b, c), n[0]), v3.mul(v3.cross(c, a), n[1])), v3.mul(v3.cross(a, b), n[2]))); };
+    const first = (sub, c) => sub.findIndex(it => it.c === c);
+    const num = (sub, c, d) => { const k = first(sub, c); return k < 0 ? d : parseFloat(sub[k].v); };
+    const setNum = (sub, c, v, afterCodes) => {
+      const k = first(sub, c); if (k >= 0) { sub[k].v = fmt(v); return; }
+      let at = sub.length; if (afterCodes) { let q = -1; sub.forEach((it, i) => { if (afterCodes.indexOf(it.c) >= 0) q = i; }); if (q >= 0) at = q + 1; }
+      sub.splice(at, 0, mk(c, fmt(v)));
+    };
+    const getV = (sub, c, d) => [num(sub, c, d[0]), num(sub, c + 10, d[1]), num(sub, c + 20, d[2])];
+    const setV = (sub, c, v, afterCodes) => {
+      const k = first(sub, c);
+      if (k < 0) {
+        let at = sub.length; if (afterCodes) { let q = -1; sub.forEach((it, i) => { if (afterCodes.indexOf(it.c) >= 0) q = i; }); if (q >= 0) at = q + 1; }
+        sub.splice(at, 0, mk(c, fmt(v[0])), mk(c + 10, fmt(v[1])), mk(c + 20, fmt(v[2]))); return;
+      }
+      sub[k].v = fmt(v[0]);
+      let j = first(sub, c + 10); if (j < 0) { sub.splice(k + 1, 0, mk(c + 10, fmt(v[1]))); j = k + 1; } else sub[j].v = fmt(v[1]);
+      const z = first(sub, c + 20); if (z < 0) sub.splice(j + 1, 0, mk(c + 20, fmt(v[2]))); else sub[z].v = fmt(v[2]);
+    };
+    const setNormal = (sub, n) => {
+      if (first(sub, 210) < 0) {
+        if (Math.abs(n[0]) < 1e-12 && Math.abs(n[1]) < 1e-12 && n[2] > 0) return;
+        // yazılarda ikinci alt sınıf işaretinden önce; diğerlerinde sona
+        let at = sub.length;
+        const marks = []; sub.forEach((it, i) => { if (it.c === 100) marks.push(i); });
+        const t = sub[0].v.trim();
+        if ((t === 'TEXT' || t === 'ATTRIB' || t === 'ATTDEF') && marks.length >= 3) at = marks[2];
+        sub.splice(at, 0, mk(210, fmt(n[0])), mk(220, fmt(n[1])), mk(230, fmt(n[2])));
+        return;
+      }
+      setV(sub, 210, n);
+    };
+    // aynı alt varlıkta tekrar eden nokta/vektör üçlüleri (10/20/30 …)
+    const xyzAll = (sub, codes, isVec) => {
+      for (let i = 0; i < sub.length; i++) {
+        const cx = sub[i].c; if (codes.indexOf(cx) < 0) continue;
+        let j = -1, k = -1;
+        for (let q = i + 1; q < sub.length && q <= i + 3; q++) { if (sub[q].c === cx + 10 && j < 0) j = q; else if (sub[q].c === cx + 20 && k < 0) k = q; }
+        const p = [parseFloat(sub[i].v), j >= 0 ? parseFloat(sub[j].v) : 0, k >= 0 ? parseFloat(sub[k].v) : 0];
+        const r = isVec ? A(p) : P(p);
+        sub[i].v = fmt(r[0]);
+        if (j >= 0) sub[j].v = fmt(r[1]); else { sub.splice(i + 1, 0, mk(cx + 10, fmt(r[1]))); j = i + 1; if (k > i) k++; }
+        if (k >= 0) sub[k].v = fmt(r[2]); else sub.splice(j + 1, 0, mk(cx + 20, fmt(r[2])));
+        i = Math.max(i, j, k);
+      }
+    };
+    const W3 = {
+      LINE: { P: [10, 11] }, POINT: { P: [10] }, '3DFACE': { P: [10, 11, 12, 13] }, SPLINE: { P: [10, 11], V: [12, 13], N: true },
+      LEADER: { P: [10], V: [211, 212, 213], N: true }, MLINE: { P: [10, 11], V: [12, 13], N: true }, MESH: { P: [10] },
+      IMAGE: { P: [10], V: [11, 12] }, WIPEOUT: { P: [10], V: [11, 12] }, TOLERANCE: { P: [10], V: [11], N: true }, VERTEX: { P: [10] }
+    };
+    // ELLIPSE: eşlenik yarı eksenlerden asal eksenler
+    const ellipse = (sub) => {
+      const C = getV(sub, 10, [0, 0, 0]), mj = getV(sub, 11, [1, 0, 0]), N = v3.norm(getV(sub, 210, [0, 0, 1]));
+      const ratio = num(sub, 40, 1), TP = 2 * Math.PI;
+      let t0 = num(sub, 41, 0), t1 = num(sub, 42, TP);
+      const full = Math.abs(t1 - t0 - TP) < 1e-9 || (Math.abs(t0) < 1e-12 && Math.abs(t1 - TP) < 1e-9);
+      const a = A(mj), b = A(v3.mul(v3.cross(N, mj), ratio));
+      const tp = 0.5 * Math.atan2(2 * v3.dot(a, b), v3.dot(a, a) - v3.dot(b, b));
+      const u = v3.add(v3.mul(a, Math.cos(tp)), v3.mul(b, Math.sin(tp))), w = v3.add(v3.mul(a, -Math.sin(tp)), v3.mul(b, Math.cos(tp)));
+      let maj, mnr, sh;
+      if (v3.len(u) >= v3.len(w)) { maj = u; mnr = w; sh = tp; } else { maj = w; mnr = v3.mul(u, -1); sh = tp + Math.PI / 2; }
+      if (!(v3.len(maj) > 0)) return;
+      const N2 = v3.norm(v3.cross(maj, mnr));
+      const wrap = (t) => { t %= TP; if (t < 0) t += TP; return t; };
+      setV(sub, 10, P(C)); setV(sub, 11, maj);
+      setV(sub, 210, v3.len(mnr) > 0 ? N2 : cofN(N), [11, 21, 31]);
+      setNum(sub, 40, Math.min(1, v3.len(mnr) / v3.len(maj)));
+      if (full) { setNum(sub, 41, 0, [40]); setNum(sub, 42, TP, [41]); }
+      else { const s0 = wrap(t0 - sh); let s1 = wrap(t1 - sh); if (s1 <= s0 + 1e-12) s1 += TP; setNum(sub, 41, s0, [40]); setNum(sub, 42, s1, [41]); }
+    };
+    const mtext = (sub) => {
+      const N = v3.norm(getV(sub, 210, [0, 0, 1])), [Ax, Ay] = ocsAxes(N);
+      let xd;
+      if (first(sub, 11) >= 0) xd = v3.norm(getV(sub, 11, [1, 0, 0]));
+      else { const r = num(sub, 50, 0) * Math.PI / 180; xd = v3.add(v3.mul(Ax, Math.cos(r)), v3.mul(Ay, Math.sin(r))); }
+      const yd = v3.cross(N, xd), X = A(xd), Y = A(yd);
+      if (!(v3.len(X) > 0)) return;
+      const Xn = v3.norm(X), hk = v3.len(v3.cross(Xn, Y)), N2 = v3.norm(v3.cross(X, Y));
+      xyzAll(sub, [10], false);
+      const k50 = first(sub, 50); if (k50 >= 0) sub.splice(k50, 1);
+      if (first(sub, 11) < 0) { const at = Math.max(first(sub, 30), first(sub, 20), first(sub, 10)) + 1; sub.splice(at, 0, mk(11, fmt(Xn[0])), mk(21, fmt(Xn[1])), mk(31, fmt(Xn[2]))); }
+      else setV(sub, 11, Xn);
+      for (const c of [40, 46]) { const k = first(sub, c); if (k >= 0) sub[k].v = fmt(parseFloat(sub[k].v) * hk); }
+      const k41 = first(sub, 41); if (k41 >= 0) sub[k41].v = fmt(parseFloat(sub[k41].v) * v3.len(X));
+      setNormal(sub, N2);
+    };
+    const wcs = (sub, type) => {
+      if (type === 'ELLIPSE') return ellipse(sub);
+      if (type === 'MTEXT') return mtext(sub);
+      const K = W3[type]; if (!K) return;
+      const N0 = getV(sub, 210, [0, 0, 1]);
+      if (K.P) xyzAll(sub, K.P, false);
+      if (K.V) xyzAll(sub, K.V, true);
+      if (K.N) { if (first(sub, 210) >= 0) setV(sub, 210, cofN(N0)); }
+      else if (type === 'LINE' || type === 'POINT') {
+        // kalınlık doğrultusu çıkış yönü boyunca
+        const th = num(sub, 39, 0), v = A(v3.norm(N0)), l = v3.len(v);
+        if (th && l > 0) { setNum(sub, 39, th * l); setNormal(sub, v3.mul(v, 1 / l)); }
+        else if (first(sub, 210) >= 0 && l > 0) setV(sub, 210, v3.mul(v, 1 / l));
+      }
+    };
+    // LWPOLYLINE yaylarını kısa doğrulara çevir (eşit olmayan ölçekte yay → elips olur)
+    const densifyLw = (sub) => {
+      const vi = []; sub.forEach((it, i) => { if (it.c === 10) vi.push(i); });
+      const n = vi.length; if (n < 2) return;
+      const closed = (num(sub, 70, 0) | 0) & 1;
+      const recs = vi.map((s, q) => { const e = q + 1 < n ? vi[q + 1] : (() => { let k = s + 1; while (k < sub.length && [20, 30, 40, 41, 42, 91].indexOf(sub[k].c) >= 0) k++; return k; })(); return sub.slice(s, e); });
+      const lastEnd = (() => { let k = vi[n - 1] + 1; while (k < sub.length && [20, 30, 40, 41, 42, 91].indexOf(sub[k].c) >= 0) k++; return k; })();
+      const xy = (r) => [parseFloat(r.find(it => it.c === 10).v), parseFloat((r.find(it => it.c === 20) || { v: '0' }).v)];
+      const out = [];
+      for (let q = 0; q < n; q++) {
+        const r = recs[q], bi = r.findIndex(it => it.c === 42), b = bi >= 0 ? parseFloat(r[bi].v) : 0;
+        if (bi >= 0) r.splice(bi, 1);
+        out.push(...r);
+        if (!b || (q === n - 1 && !closed)) continue;
+        const p1 = xy(r), p2 = xy(recs[(q + 1) % n]), dx = p2[0] - p1[0], dy = p2[1] - p1[1], d = Math.hypot(dx, dy);
+        if (d < 1e-12) continue;
+        const th = 4 * Math.atan(b), off = (d / 2) / Math.tan(th / 2);
+        const cx = (p1[0] + p2[0]) / 2 - dy / d * off, cy = (p1[1] + p2[1]) / 2 + dx / d * off, rr = Math.hypot(p1[0] - cx, p1[1] - cy);
+        const a0 = Math.atan2(p1[1] - cy, p1[0] - cx), m = Math.max(2, Math.ceil(Math.abs(th) / (Math.PI / 36)));
+        for (let k = 1; k < m; k++) { const a = a0 + th * k / m; out.push(mk(10, fmt(cx + rr * Math.cos(a))), mk(20, fmt(cy + rr * Math.sin(a)))); }
+      }
+      sub.splice(vi[0], lastEnd - vi[0], ...out);
+      const k90 = first(sub, 90); if (k90 >= 0) sub[k90].v = String(sub.filter(it => it.c === 10).length);
+    };
+    // HATCH sınırlarını yaysız çokgen yollara çevir (eşit olmayan ölçekte yay/elips kenarları korunamaz)
+    const densifyHatch = (sub) => {
+      const i91 = first(sub, 91); if (i91 < 0) return;
+      let i = i91 + 1;
+      const np = parseInt(sub[i91].v, 10) || 0, paths = [];
+      const nx = (c) => { while (i < sub.length && sub[i].c !== c) i++; return i < sub.length ? parseFloat(sub[i++].v) : 0; };
+      const optional = (c) => (i < sub.length && sub[i].c === c) ? parseFloat(sub[i++].v) : null;
+      for (let p = 0; p < np && i < sub.length; p++) {
+        while (i < sub.length && sub[i].c !== 92) i++;
+        if (i >= sub.length) break;
+        const flags = parseInt(sub[i++].v, 10) || 0, pts = [];
+        if (flags & 2) {
+          const hasB = (i < sub.length && sub[i].c === 72) ? parseFloat(sub[i++].v) : 0;
+          optional(73);
+          const nv = nx(93) | 0, V = [];
+          for (let v = 0; v < nv && i < sub.length; v++) { const x = nx(10), y = optional(20); let b = 0; if (hasB) { const q = optional(42); if (q !== null) b = q; } V.push([x, y === null ? nx(20) : y, b]); }
+          for (let v = 0; v < V.length; v++) {
+            const a = V[v], b = V[(v + 1) % V.length]; pts.push([a[0], a[1]]);
+            if (a[2]) {
+              const dx = b[0] - a[0], dy = b[1] - a[1], d = Math.hypot(dx, dy); if (d < 1e-12) continue;
+              const th = 4 * Math.atan(a[2]), off = (d / 2) / Math.tan(th / 2), cx = (a[0] + b[0]) / 2 - dy / d * off, cy = (a[1] + b[1]) / 2 + dx / d * off;
+              const r = Math.hypot(a[0] - cx, a[1] - cy), a0 = Math.atan2(a[1] - cy, a[0] - cx), m = Math.max(2, Math.ceil(Math.abs(th) / (Math.PI / 36)));
+              for (let k = 1; k < m; k++) { const t = a0 + th * k / m; pts.push([cx + r * Math.cos(t), cy + r * Math.sin(t)]); }
+            }
+          }
+        } else {
+          const ne = nx(93) | 0;
+          for (let e = 0; e < ne && i < sub.length; e++) {
+            const et = nx(72) | 0;
+            if (et === 1) { const x1 = nx(10), y1 = nx(20), x2 = nx(11), y2 = nx(21); pts.push([x1, y1], [x2, y2]); }
+            else if (et === 2) {
+              const cx = nx(10), cy = nx(20), r = nx(40), a0 = nx(50) * Math.PI / 180, a1 = nx(51) * Math.PI / 180, ccw = nx(73);
+              let s0 = a0, s1 = a1; let sw = s1 - s0; while (sw <= 0) sw += 2 * Math.PI; if (sw > 2 * Math.PI + 1e-9) sw = 2 * Math.PI;
+              const m = Math.max(4, Math.ceil(sw / (Math.PI / 36)));
+              // ccw=0: açılar saat yönünde ölçülür (y yansımış)
+              for (let k = 0; k <= m; k++) { const t = s0 + sw * k / m; pts.push([cx + r * Math.cos(t), cy + (ccw ? 1 : -1) * r * Math.sin(t)]); }
+            } else if (et === 3) {
+              const cx = nx(10), cy = nx(20), mx = nx(11), my = nx(21), ra = nx(40), a0 = nx(50) * Math.PI / 180, a1 = nx(51) * Math.PI / 180, ccw = nx(73);
+              let sw = a1 - a0; while (sw <= 0) sw += 2 * Math.PI; if (sw > 2 * Math.PI + 1e-9) sw = 2 * Math.PI;
+              const m = Math.max(4, Math.ceil(sw / (Math.PI / 36))), sg = ccw ? 1 : -1;
+              for (let k = 0; k <= m; k++) { const t = sg * (a0 + sw * k / m); pts.push([cx + mx * Math.cos(t) - my * ra * Math.sin(t), cy + my * Math.cos(t) + mx * ra * Math.sin(t)]); }
+            } else if (et === 4) {
+              const deg = nx(94) | 0; nx(73); nx(74);
+              const nk = nx(95) | 0, nc = nx(96) | 0, kn = [], cx = [], cy = [], w = [];
+              for (let k = 0; k < nk; k++) kn.push(nx(40));
+              for (let k = 0; k < nc; k++) { cx.push(nx(10)); cy.push(nx(20)); const q = optional(42); if (q !== null) w.push(q); }
+              const nf = optional(97); if (nf) for (let k = 0; k < nf; k++) { nx(11); nx(21); }
+              optional(12); optional(22); optional(13); optional(23);
+              const out = [];
+              if (!evalSpline(deg, cx, cy, w.length === nc ? w : null, kn, Math.min(1000, Math.max(16, nc * 8)), out)) for (let k = 0; k < nc; k++) out.push(cx[k], cy[k]);
+              for (let k = 0; k < out.length; k += 2) pts.push([out[k], out[k + 1]]);
+            }
+          }
+        }
+        const src = []; const ns = optional(97); if (ns) for (let k = 0; k < ns && i < sub.length && sub[i].c === 330; k++) src.push(sub[i++].v);
+        // ardışık yinelenen noktaları at
+        const P2 = []; for (const q of pts) { const l = P2[P2.length - 1]; if (!l || Math.hypot(l[0] - q[0], l[1] - q[1]) > 1e-12) P2.push(q); }
+        if (P2.length > 2 && Math.hypot(P2[0][0] - P2[P2.length - 1][0], P2[0][1] - P2[P2.length - 1][1]) < 1e-9) P2.pop();
+        paths.push({ flags: flags | 2, pts: P2, src });
+      }
+      const neu = [];
+      for (const pth of paths) {
+        neu.push(mk(92, String(pth.flags)), mk(72, '0'), mk(73, '1'), mk(93, String(pth.pts.length)));
+        for (const q of pth.pts) neu.push(mk(10, fmt(q[0])), mk(20, fmt(q[1])));
+        neu.push(mk(97, String(pth.src.length))); for (const h of pth.src) neu.push(mk(330, h));
+      }
+      sub.splice(i91 + 1, i - i91 - 1, ...neu);
+    };
+    const toEllipse = (sub, type) => {
+      // CIRCLE/ARC → ELLIPSE (yalnız alt sınıf işaretli sürümlerde)
+      const k = sub.findIndex(it => it.c === 100 && it.v.trim() === 'AcDbCircle'); if (k < 0) return false;
+      const N = v3.norm(getV(sub, 210, [0, 0, 1])), [Ax, Ay] = ocsAxes(N);
+      const c = [num(sub, 10, 0), num(sub, 20, 0), num(sub, 30, 0)], r = Math.abs(num(sub, 40, 0));
+      const C = v3.add(v3.add(v3.mul(Ax, c[0]), v3.mul(Ay, c[1])), v3.mul(N, c[2]));
+      const D2R = Math.PI / 180;
+      let t0 = 0, t1 = 2 * Math.PI;
+      if (type === 'ARC') { t0 = num(sub, 50, 0) * D2R; t1 = num(sub, 51, 360) * D2R; while (t1 <= t0) t1 += 2 * Math.PI; }
+      const head = sub.slice(0, k); head[0] = mk(0, 'ELLIPSE');
+      const mj = v3.mul(Ax, r);
+      sub.length = 0;
+      sub.push(...head, mk(100, 'AcDbEllipse'), mk(10, fmt(C[0])), mk(20, fmt(C[1])), mk(30, fmt(C[2])), mk(11, fmt(mj[0])), mk(21, fmt(mj[1])), mk(31, fmt(mj[2])),
+        mk(210, fmt(N[0])), mk(220, fmt(N[1])), mk(230, fmt(N[2])), mk(40, '1.0'), mk(41, fmt(t0)), mk(42, fmt(t1)));
+      ellipse(sub);
+      return true;
+    };
+    // OCS'li varlık grubu: düzlem içi 2B dönüşüm + yeni çıkış yönü
+    const ocsGroup = (grp) => {
+      const main = grp[0], type = main[0].v.trim();
+      const N = v3.norm(getV(main, 210, [0, 0, 1])), [Ax, Ay] = ocsAxes(N);
+      const ax = A(Ax), ay = A(Ay), an = A(N), cr = v3.cross(ax, ay);
+      if (!(v3.len(cr) > 1e-300)) return grp.flat();
+      const N2 = v3.norm(cr), [Bx, By] = ocsAxes(N2);
+      const L = [v3.dot(Bx, ax), v3.dot(Bx, ay), v3.dot(By, ax), v3.dot(By, ay)];
+      let ze;
+      if (type === 'LWPOLYLINE') ze = num(main, 38, 0);
+      else if (type === 'HATCH') { const k = first(main, 30); ze = k >= 0 ? parseFloat(main[k].v) : 0; }
+      else ze = num(main, 30, 0);
+      const X8 = [L[0], L[1], L[2], L[3], ze * v3.dot(Bx, an) + v3.dot(Bx, tr), ze * v3.dot(By, an) + v3.dot(By, tr), v3.dot(N2, an), v3.dot(N2, tr)];
+      const similar = sim2(L[0], L[1], L[2], L[3]);
+      const after = [];   // eski motor sonrası üzerine yazılacak değerler
+      if (!similar) {
+        if ((type === 'CIRCLE' || type === 'ARC') && toEllipse(main, type)) return main;
+        if (type === 'LWPOLYLINE' && main.some(it => it.c === 42 && Math.abs(parseFloat(it.v)) > 1e-12)) densifyLw(main);
+        if (type === 'HATCH') densifyHatch(main);
+        if (type === 'TEXT' || type === 'ATTRIB' || type === 'ATTDEF') {
+          const r = num(main, 50, 0) * Math.PI / 180, h = num(main, 40, 1), wf = num(main, 41, 1);
+          const d = [L[0] * Math.cos(r) + L[1] * Math.sin(r), L[2] * Math.cos(r) + L[3] * Math.sin(r)];
+          const q = [-L[0] * Math.sin(r) + L[1] * Math.cos(r), -L[2] * Math.sin(r) + L[3] * Math.cos(r)];
+          const dl = Math.hypot(d[0], d[1]) || 1, hk = Math.abs(d[0] * q[1] - d[1] * q[0]) / dl || 1;
+          after.push([40, h * hk], [50, norm360(Math.atan2(d[1], d[0]) * R2D)], [41, wf * dl / hk]);
+        }
+        if (type === 'INSERT') {
+          const r = num(main, 50, 0) * Math.PI / 180, sx = num(main, 41, 1), sy = num(main, 42, 1);
+          const c1 = [L[0] * sx * Math.cos(r) + L[1] * sx * Math.sin(r), L[2] * sx * Math.cos(r) + L[3] * sx * Math.sin(r)];
+          const c2 = [-L[0] * sy * Math.sin(r) + L[1] * sy * Math.cos(r), -L[2] * sy * Math.sin(r) + L[3] * sy * Math.cos(r)];
+          const r2 = Math.atan2(c1[1], c1[0]), fx = Math.hypot(c1[0], c1[1]) / (Math.abs(sx) || 1), fy = (-Math.sin(r2) * c2[0] + Math.cos(r2) * c2[1]) / (sy || 1);
+          after.push([41, Math.hypot(c1[0], c1[1])], [42, -Math.sin(r2) * c2[0] + Math.cos(r2) * c2[1]], [50, norm360(r2 * R2D)]);
+          if (first(main, 44) >= 0) after.push([44, num(main, 44, 0) * fx]);
+          if (first(main, 45) >= 0) after.push([45, num(main, 45, 0) * Math.abs(fy)]);
+        }
+      }
+      const res = xformItems(grp.flat(), xfMake(X8), true);
+      let end = res.findIndex((it, i) => i > 0 && it.c === 0); if (end < 0) end = res.length;
+      const m2 = res.slice(0, end);
+      for (const [c, v] of after) setNum(m2, c, v, c === 50 ? [40, 41, 1] : [40, 30, 20]);
+      setNormal(m2, N2);
+      return m2.concat(res.slice(end));
+    };
+    const subs = [];
+    for (const it of items) { if (it.c === 0 || !subs.length) subs.push([]); subs[subs.length - 1].push(it); }
+    const out = [];
+    for (let i = 0; i < subs.length;) {
+      const sub = subs[i], type = sub[0].c === 0 ? sub[0].v.trim() : '';
+      if (type === 'POLYLINE') {
+        let j = i + 1; while (j < subs.length && subs[j][0].v.trim() === 'VERTEX') j++;
+        if (j < subs.length && subs[j][0].v.trim() === 'SEQEND') j++;
+        const grp = subs.slice(i, j);
+        if ((num(sub, 70, 0) | 0) & (8 | 16 | 64)) {
+          // 3B çoklu çizgi / kafes: köşeler WCS
+          for (const g of grp.slice(1)) if (g[0].v.trim() === 'VERTEX') { const f = num(g, 70, 0) | 0; if (!((f & 128) && !(f & 64))) xyzAll(g, [10], false); }
+          for (const g of grp) out.push(...g);
+        } else out.push(...ocsGroup(grp));
+        i = j; continue;
+      }
+      if (OCS_TYPES.has(type) && type !== 'VERTEX') out.push(...ocsGroup([sub]));
+      else { wcs(sub, type); out.push(...sub); }
+      i++;
+    }
+    return out;
+  }
+  // Ham öğelere dönüşüm: düzlemsel benzerlik → kesin eski yol; aksi halde genel 3B yol
+  function xfApply(items, T) {
+    // eğik düzlemli (210/220 ≠ 0) nesnelerde OCS ≠ WCS: düzlem yolu kullanılamaz
+    const tilted = items.some(it => (it.c === 210 || it.c === 220) && Math.abs(parseFloat(it.v)) > 1e-12);
+    if (!tilted) {
+      if (T.length !== 12) return xformItems(items, xfMake(T));
+      if (mPlanar(T) && sim2(T[0], T[1], T[4], T[5])) return xformItems(items, xfMake(mTo8(T)));
+    }
+    return xformItems3D(items, toM(T));
   }
 
   // Ham varlık metnini düzenle. ed: {T (mutlak dönüşüm), aci, layer, copy:{alloc()}}
@@ -1442,7 +1826,7 @@ function DXFCore() {
     const np = lines.length >> 1;
     let items = new Array(np);
     for (let i = 0; i < np; i++) items[i] = { cs: lines[2 * i], c: parseInt(lines[2 * i], 10), v: lines[2 * i + 1] };
-    if (ed.T && !xfIdentity(ed.T)) items = xformItems(items, xfMake(ed.T));
+    if (ed.T && !xfIdentity(ed.T)) items = xfApply(items, ed.T);
     // alt varlıklar (POLYLINE/VERTEX/SEQEND, INSERT/ATTRIB…)
     let si = -1;
     for (const it of items) { if (it.c === 0) si++; it.si = si; }
@@ -1478,7 +1862,7 @@ function DXFCore() {
   }
 
   // Grup kodu dizisine geometrik dönüşüm uygula (alt varlık bazında). Eksik gerekli kodları ekler.
-  function xformItems(items, X) {
+  function xformItems(items, X, noConj) {
     // alt varlıklara böl
     const subs = [];
     for (const it of items) { if (it.c === 0 || !subs.length) subs.push([]); subs[subs.length - 1].push(it); }
@@ -1494,7 +1878,7 @@ function DXFCore() {
       if (type === 'POLYLINE') { polyFlags = flags; polyExt = ext; }
       let ocs = OCS_TYPES.has(type);
       if (type === 'VERTEX') { ocs = (polyFlags & (8 | 16 | 64)) === 0; if (ext === null) ext = polyExt; }
-      const F = (ocs && ext !== null && ext < 0) ? xfConj(X) : X;
+      const F = (!noConj && ocs && ext !== null && ext < 0) ? xfConj(X) : X;
       const ins = (k, it) => { sub.splice(k, 0, it); };
       const mk = (c, v) => ({ cs: codeStr(c), c, v });
       const after = (codes) => { let k = -1; sub.forEach((it, i) => { if (codes.indexOf(it.c) >= 0) k = i; }); return k; };
@@ -1759,6 +2143,8 @@ function DXFCore() {
     const thick = g(39, 0);
     const flip = g(230, 1) < 0, fx = flip ? -1 : 1;
     if (thick) def.thick = thick * fx;
+    // keyfi egik duzlemdeki (OCS) nesneler: duzlem geometri araclari bunlari isleyemez
+    if (OCS_TYPES.has(type) && (Math.abs(g(210, 0)) > 1e-12 || Math.abs(g(220, 0)) > 1e-12)) return Object.assign(def, { type, unsupported: true, tilted: true });
     if (type === 'LINE') return Object.assign(def, { type, x1: g(10, 0), y1: g(20, 0), z1: g(30, 0), x2: g(11, 0), y2: g(21, 0), z2: g(31, 0) });
     if (type === 'POINT') return Object.assign(def, { type, x: g(10, 0), y: g(20, 0), z: g(30, 0) });
     if (type === 'CIRCLE') return Object.assign(def, { type, cx: fx * g(10, 0), cy: g(20, 0), cz: fx * g(30, 0), r: Math.abs(g(40, 0)) });
@@ -1842,16 +2228,34 @@ function DXFCore() {
 
     // yeni katmanlar: LAYER tablosunun sonuna (ENDTAB'tan önce)
     let layerText = '';
+    const lflags = (L) => (L.frozen ? 1 : 0) | (L.locked ? 4 : 0);
     if (msg.newLayers && msg.newLayers.length && msg.layerEnd >= 0) {
       for (const L of msg.newLayers) {
         const P = [], p = (c, v) => P.push(codeStr(c), String(v));
         p(0, 'LAYER');
         if (modern) { p(5, alloc()); if (msg.layerTableHandle) p(330, msg.layerTableHandle); p(100, 'AcDbSymbolTableRecord'); p(100, 'AcDbLayerTableRecord'); }
-        p(2, L.name); p(70, 0); p(62, L.aci || 7); p(6, 'Continuous');
+        p(2, L.name); p(70, lflags(L)); p(62, (L.off ? -1 : 1) * (L.aci || 7)); p(6, 'Continuous');
         layerText += P.join(eol) + eol;
       }
     }
     const events = [];
+    // mevcut katman kayıtları: ad / renk / açık-kapalı / kilit / dondurma yerinde güncellenir ya da silinir
+    for (const m of (msg.layerMods || [])) {
+      if (!(m.fe > m.fs)) continue;
+      if (m.del) { events.push({ fs: m.fs, fe: m.fe, text: '' }); continue; }
+      const L = dec.decode(read(m.fs, m.fe)).split(/\r?\n/); if (L.length && L[L.length - 1] === '') L.pop();
+      const out = []; let has62 = false;
+      for (let i = 0; i + 1 < L.length; i += 2) {
+        const c = parseInt(L[i], 10); let v = L[i + 1];
+        if (c === 2) v = m.name;
+        else if (c === 62) { has62 = true; v = String((m.off ? -1 : 1) * Math.abs(m.aci || 7)); }
+        else if (c === 70) v = String(((parseInt(v, 10) || 0) & ~5) | lflags(m));
+        else if (c === 420 && m.colorChanged) continue;   // gerçek renk yerine seçilen ACI
+        out.push(L[i], v);
+        if (c === 70 && !has62 && !L.some((x, j) => j % 2 === 0 && parseInt(x, 10) === 62)) { out.push(codeStr(62), String((m.off ? -1 : 1) * Math.abs(m.aci || 7))); has62 = true; }
+      }
+      events.push({ fs: m.fs, fe: m.fe, text: out.join(eol) + eol });
+    }
     if (modern && allocated && msg.handseed) events.push({ fs: msg.handseed[0], fe: msg.handseed[1], text: hnext.toString(16).toUpperCase() });
     if (layerText) events.push({ fs: msg.layerEnd, fe: msg.layerEnd, text: layerText });
     const parts = [];
@@ -1863,7 +2267,8 @@ function DXFCore() {
     };
     const put = (text) => { if (text) parts.push(enc(text)); };
     if (msg.mode === 'subset') {
-      for (const ev of events) { raw(cur, ev.fs); put(ev.text); cur = ev.fe; }
+      events.sort((a, b) => a.fs - b.fs);
+      for (const ev of events) { if (ev.fs < cur) continue; raw(cur, ev.fs); put(ev.text); cur = ev.fe; }
       raw(cur, msg.entStart); cur = msg.entStart;
       const ops = msg.ops.slice().sort((a, b) => a.fs - b.fs);
       for (const o of ops) {
@@ -1891,7 +2296,8 @@ function DXFCore() {
     codepageLabel, makeEncoder, decodeDxfString, cleanMText, fastFloat,
     TextTok, BinTok, isBinaryDxf, Builder, Parser, parseStream, evalSpline, textBBox,
     T, TYPE_NAMES, F_BYLAYER, F_NEW, F_POINTS, F_NOBBOX,
-    fmtNum, codeStr, patchEntity, genEntity, parseDef, xformItems, xfMake, xfCompose, xfInverse, xfIdentity, xfTextAng, xfAng
+    fmtNum, codeStr, patchEntity, genEntity, parseDef, xformItems, xformItems3D, xfApply, xfMake, xfCompose, xfInverse, xfIdentity, xfTextAng, xfAng,
+    toM, mMul, mInv, mDet, mPlanar, mTo8, sim2, arbAxis, ocsAxes
   };
 }
 

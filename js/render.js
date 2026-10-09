@@ -14,6 +14,7 @@ layout(location=6) in vec4 i_col;
 layout(location=7) in vec4 i_lcol;
 layout(location=8) in float a_z;
 layout(location=9) in vec2 i_z;
+layout(location=10) in vec4 i_x;   // blok örneğinin 3B terimleri (m02, m12, m20, m21)
 uniform mat4 u_M;
 uniform vec3 u_T;
 uniform float u_zs;
@@ -23,9 +24,9 @@ uniform vec3 u_fg;
 uniform sampler2D u_layers;
 uniform float u_psize;
 uniform vec4 u_hl;
-uniform vec4 u_xa;   // önizleme dönüşümü (a,b,c,d)
-uniform vec4 u_xt;   // (e,f,zs,zt)
+uniform mat4 u_X;   // seçimin önizleme dönüşümü (3B afin, göreli koordinat)
 uniform float u_nolay;
+uniform vec3 u_lbg;
 out vec4 v_col;
 out vec3 v_p;
 float fl(vec4 c){ return floor(c.a*255.0+0.5); }
@@ -47,12 +48,14 @@ void main(){
   float a2 = fl(col);
   if (a2 > 251.5 && a2 < 254.5) col = vec4(u_fg, 1.0);
   ivec2 lt = ivec2(int(mod(lay, 256.0)), int(floor(lay / 256.0)));
-  if (u_nolay < 0.5 && texelFetch(u_layers, lt, 0).r < 0.5) { gl_Position = vec4(2.0,2.0,2.0,1.0); v_col = vec4(0.0); return; }
-  vec2 w0 = vec2(dot(i_m0.xy, a_pos) + i_m0.z, dot(i_m1.xy, a_pos) + i_m1.z);
-  vec2 w = vec2(u_xa.x * w0.x + u_xa.y * w0.y, u_xa.z * w0.x + u_xa.w * w0.y) + u_xt.xy;
-  float z = u_bflat > 0.5 ? i_z.y : i_z.x * a_z + i_z.y;
-  z = u_xt.z * z + u_xt.w;
-  vec3 p = vec3(w, z * u_zs) - u_T;
+  float lv = texelFetch(u_layers, lt, 0).r;
+  if (u_nolay < 0.5 && lv < 0.5) { gl_Position = vec4(2.0,2.0,2.0,1.0); v_col = vec4(0.0); return; }
+  if (u_nolay < 0.5 && lv < 0.9) col = vec4(mix(col.rgb, u_lbg, 0.55), col.a);   // kilitli katman soluk
+  vec2 w0 = vec2(dot(i_m0.xy, a_pos) + i_m0.z + i_x.x * a_z, dot(i_m1.xy, a_pos) + i_m1.z + i_x.y * a_z);
+  float z0 = u_bflat > 0.5 ? i_z.y : i_x.z * a_pos.x + i_x.w * a_pos.y + i_z.x * a_z + i_z.y;
+  vec4 q = u_X * vec4(w0, z0, 1.0);
+  float z = q.z;
+  vec3 p = vec3(q.xy, z * u_zs) - u_T;
   v_p = p;
   gl_Position = u_M * vec4(p, 1.0);
   gl_PointSize = u_psize;
@@ -81,6 +84,17 @@ void main(){
 
 const DEG = Math.PI / 180;
 const XF_ID = [1, 0, 0, 1, 0, 0, 1, 0];
+const MAT_ID = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+// 8 sayılı (düzlem) ya da 12 sayılı (3×4) dönüşüm → sütun öncelikli mat4
+function xfMat4(T) {
+  const M = T.length === 12 ? T : [T[0], T[1], 0, T[4], T[2], T[3], 0, T[5], 0, 0, T[6], T[7]];
+  return new Float32Array([M[0], M[4], M[8], 0, M[1], M[5], M[9], 0, M[2], M[6], M[10], 0, M[3], M[7], M[11], 1]);
+}
+function xfIsId(T) {
+  if (!T) return true;
+  if (T.length === 12) return T[0] === 1 && T[1] === 0 && T[2] === 0 && T[3] === 0 && T[4] === 0 && T[5] === 1 && T[6] === 0 && T[7] === 0 && T[8] === 0 && T[9] === 0 && T[10] === 1 && T[11] === 0;
+  return T[0] === 1 && T[1] === 0 && T[2] === 0 && T[3] === 1 && T[4] === 0 && T[5] === 0 && T[6] === 1 && T[7] === 0;
+}
 
 class Renderer {
   constructor(canvas, overlay, store) {
@@ -91,7 +105,7 @@ class Renderer {
     this.ctx = overlay.getContext('2d');
     this.prog = this.program(VS_SRC(false), FS_LINE);
     this.tprog = this.program(VS_SRC(true), FS_TRI);
-    const uni = (P) => { const U = (n) => gl.getUniformLocation(P, n); return { M: U('u_M'), T: U('u_T'), zs: U('u_zs'), bflat: U('u_bflat'), zc: U('u_zc'), fg: U('u_fg'), layers: U('u_layers'), psize: U('u_psize'), hl: U('u_hl'), xa: U('u_xa'), xt: U('u_xt'), nolay: U('u_nolay'), style: U('u_style'), bg: U('u_bg'), light: U('u_light'), vdir: U('u_vdir') }; };
+    const uni = (P) => { const U = (n) => gl.getUniformLocation(P, n); return { M: U('u_M'), T: U('u_T'), zs: U('u_zs'), bflat: U('u_bflat'), zc: U('u_zc'), fg: U('u_fg'), layers: U('u_layers'), psize: U('u_psize'), hl: U('u_hl'), X: U('u_X'), lbg: U('u_lbg'), nolay: U('u_nolay'), style: U('u_style'), bg: U('u_bg'), light: U('u_light'), vdir: U('u_vdir') }; };
     this.u = uni(this.prog); this.tu = uni(this.tprog);
     this.layerTex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, this.layerTex);
@@ -105,6 +119,7 @@ class Renderer {
     this.zcolor = false; this.zcr = [0, 1];
     this.blockFlat = false;   // blok sembollerini ekleme kotunda düz çiz
     this.style = 'wire';      // 'wire' tel kafes · 'hidden' gizli çizgi · 'shaded' gölgeli
+    this.edges = true;        // çizgiler (tel kafes) görünsün mü — yüzeyli stillerde kapatılabilir
     this.dark = true; this.bg = [0.105, 0.118, 0.137]; this.fg = [1, 1, 1];
     this.hl = { chunks: new Map(), blocks: new Map(), dirty: true };
     this.preview = null;       // araç önizlemesi (2D katman)
@@ -144,7 +159,9 @@ class Renderer {
   }
   updateLayers() {
     const v = this.store.layerVis, b = this.layerBytes;
+    const Ls = this.store.layers;
     for (let i = 0; i < 65536; i++) b[i] = v[i] ? 255 : 0;
+    for (let i = 0; i < Ls.length; i++) if (b[i] && Ls[i] && Ls[i].locked) b[i] = 160;
     const gl = this.gl;
     gl.bindTexture(gl.TEXTURE_2D, this.layerTex);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
@@ -383,7 +400,7 @@ class Renderer {
       const G = B.gl = { pos: this.buffer(B.pos), col: this.buffer(B.col), lay: this.buffer(B.lay), z: this.buffer(B.z),
         ppos: this.buffer(B.ppos), pcol: this.buffer(B.pcol), play: this.buffer(B.play), pz: this.buffer(B.pz),
         tpos: this.buffer(B.tpos || new Float32Array(0)), tcol: this.buffer(B.tcol || new Uint32Array(0)), tlay: this.buffer(B.tlay || new Uint16Array(0)), tz: this.buffer(B.tz || new Float32Array(0)),
-        f: gl.createBuffer(), fz: gl.createBuffer(), c: gl.createBuffer(), cap: 0 };
+        f: gl.createBuffer(), fz: gl.createBuffer(), fx: gl.createBuffer(), c: gl.createBuffer(), cap: 0 };
       G.vao = gl.createVertexArray(); G.pvao = gl.createVertexArray(); G.tvao = gl.createVertexArray();
       B.geomDirty = false; B.instDirty = true; G.bound = false;
     }
@@ -391,29 +408,31 @@ class Renderer {
     if (B.instDirty) {
       gl.bindBuffer(gl.ARRAY_BUFFER, G.f); gl.bufferData(gl.ARRAY_BUFFER, B.f.a.subarray(0, B.f.n), gl.DYNAMIC_DRAW);
       gl.bindBuffer(gl.ARRAY_BUFFER, G.fz); gl.bufferData(gl.ARRAY_BUFFER, B.fz.a.subarray(0, B.fz.n), gl.DYNAMIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, G.fx); gl.bufferData(gl.ARRAY_BUFFER, B.fx.a.subarray(0, B.fx.n), gl.DYNAMIC_DRAW);
       gl.bindBuffer(gl.ARRAY_BUFFER, G.c); gl.bufferData(gl.ARRAY_BUFFER, B.c.a.subarray(0, B.c.n), gl.DYNAMIC_DRAW);
       B.instDirty = false;
       if (!G.bound) {
-        this.bindBlockVAO(G.vao, G.pos, G.col, G.lay, G.z, G.f, G.fz, G.c);
-        this.bindBlockVAO(G.pvao, G.ppos, G.pcol, G.play, G.pz, G.f, G.fz, G.c);
-        this.bindBlockVAO(G.tvao, G.tpos, G.tcol, G.tlay, G.tz, G.f, G.fz, G.c);
+        this.bindBlockVAO(G.vao, G.pos, G.col, G.lay, G.z, G.f, G.fz, G.c, G.fx);
+        this.bindBlockVAO(G.pvao, G.ppos, G.pcol, G.play, G.pz, G.f, G.fz, G.c, G.fx);
+        this.bindBlockVAO(G.tvao, G.tpos, G.tcol, G.tlay, G.tz, G.f, G.fz, G.c, G.fx);
         G.bound = true;
       }
     }
     return G;
   }
-  bindBlockVAO(vao, pos, col, lay, z, f, fz, c) {
+  bindBlockVAO(vao, pos, col, lay, z, f, fz, c, fx) {
     const gl = this.gl;
     gl.bindVertexArray(vao);
     this.attrib(0, pos, 2, gl.FLOAT, false); this.attrib(1, col, 4, gl.UNSIGNED_BYTE, true); this.attrib(2, lay, 1, gl.UNSIGNED_SHORT, false); this.attrib(8, z, 1, gl.FLOAT, false);
     this.attrib(3, f, 3, gl.FLOAT, false, 32, 0, 1); this.attrib(4, f, 3, gl.FLOAT, false, 32, 12, 1); this.attrib(5, f, 2, gl.FLOAT, false, 32, 24, 1);
     this.attrib(9, fz, 2, gl.FLOAT, false, 8, 0, 1);
+    this.attrib(10, fx, 4, gl.FLOAT, false, 16, 0, 1);
     this.attrib(6, c, 4, gl.UNSIGNED_BYTE, true, 8, 0, 1); this.attrib(7, c, 4, gl.UNSIGNED_BYTE, true, 8, 4, 1);
     gl.bindVertexArray(null);
   }
   freeBlock(B) {
     const gl = this.gl, G = B.gl; if (!G) return;
-    for (const k of ['pos', 'col', 'lay', 'z', 'ppos', 'pcol', 'play', 'pz', 'tpos', 'tcol', 'tlay', 'tz', 'f', 'fz', 'c']) gl.deleteBuffer(G[k]);
+    for (const k of ['pos', 'col', 'lay', 'z', 'ppos', 'pcol', 'play', 'pz', 'tpos', 'tcol', 'tlay', 'tz', 'f', 'fz', 'fx', 'c']) gl.deleteBuffer(G[k]);
     gl.deleteVertexArray(G.vao); gl.deleteVertexArray(G.pvao); gl.deleteVertexArray(G.tvao);
     B.gl = null;
   }
@@ -437,7 +456,7 @@ class Renderer {
   // ── vurgulama (seçim)
   clearHighlight() {
     const gl = this.gl;
-    for (const [, h] of this.hl.blocks) { gl.deleteBuffer(h.f); gl.deleteBuffer(h.fz); gl.deleteBuffer(h.c); gl.deleteVertexArray(h.vao); gl.deleteVertexArray(h.pvao); }
+    for (const [, h] of this.hl.blocks) { gl.deleteBuffer(h.f); gl.deleteBuffer(h.fz); gl.deleteBuffer(h.fx); gl.deleteBuffer(h.c); gl.deleteVertexArray(h.vao); gl.deleteVertexArray(h.pvao); }
     for (const [, h] of this.hl.chunks) { if (h.lb) gl.deleteBuffer(h.lb); if (h.pb) gl.deleteBuffer(h.pb); }
     this.hl.blocks = new Map(); this.hl.chunks = new Map(); this.hl.dirty = true;
   }
@@ -472,13 +491,14 @@ class Renderer {
     }
     for (const [b, slots] of perBlock) {
       const B = S.blocks[b]; const G = B && this.blockGL(B); if (!G) continue;
-      const f = new Float32Array(slots.length * 8), fz = new Float32Array(slots.length * 2), c = new Uint32Array(slots.length * 2);
+      const f = new Float32Array(slots.length * 8), fz = new Float32Array(slots.length * 2), fx = new Float32Array(slots.length * 4), c = new Uint32Array(slots.length * 2);
       slots.forEach((s, i) => {
         f.set(B.f.a.subarray(s * 8, s * 8 + 8), i * 8); fz[2 * i] = B.fz.a[2 * s]; fz[2 * i + 1] = B.fz.a[2 * s + 1];
+        fx.set(B.fx.a.subarray(s * 4, s * 4 + 4), i * 4);
         c[2 * i] = B.c.a[2 * s]; c[2 * i + 1] = B.c.a[2 * s + 1];
       });
-      const h = { f: this.buffer(f), fz: this.buffer(fz), c: this.buffer(c), n: slots.length, vao: gl.createVertexArray(), pvao: gl.createVertexArray() };
-      this.bindBlockVAO(h.vao, G.pos, G.col, G.lay, G.z, h.f, h.fz, h.c); this.bindBlockVAO(h.pvao, G.ppos, G.pcol, G.play, G.pz, h.f, h.fz, h.c);
+      const h = { f: this.buffer(f), fz: this.buffer(fz), fx: this.buffer(fx), c: this.buffer(c), n: slots.length, vao: gl.createVertexArray(), pvao: gl.createVertexArray() };
+      this.bindBlockVAO(h.vao, G.pos, G.col, G.lay, G.z, h.f, h.fz, h.c, h.fx); this.bindBlockVAO(h.pvao, G.ppos, G.pcol, G.play, G.pz, h.f, h.fz, h.c, h.fx);
       this.hl.blocks.set(b, h);
     }
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
@@ -491,7 +511,7 @@ class Renderer {
     const gl = this.gl;
     gl.vertexAttrib3f(3, 1, 0, 0); gl.vertexAttrib3f(4, 0, 1, 0); gl.vertexAttrib2f(5, 0, 1);
     gl.vertexAttrib4f(6, 1, 1, 1, 254 / 255); gl.vertexAttrib4f(7, 1, 1, 1, 254 / 255);
-    gl.vertexAttrib2f(9, 1, 0);
+    gl.vertexAttrib2f(9, 1, 0); gl.vertexAttrib4f(10, 0, 0, 0, 0);
   }
   setCommon(U, cam, psize) {
     const gl = this.gl;
@@ -500,8 +520,9 @@ class Renderer {
     gl.uniform1f(U.zs, cam.zs); gl.uniform1f(U.bflat, 0);
     gl.uniform4f(U.zc, this.zcolor ? 1 : 0, this.zcr[0], this.zcr[1], 0);
     gl.uniform3f(U.fg, this.fg[0], this.fg[1], this.fg[2]);
+    gl.uniform3f(U.lbg, this.bg[0], this.bg[1], this.bg[2]);
     gl.uniform1f(U.psize, psize);
-    gl.uniform4f(U.hl, 0, 0, 0, 0); gl.uniform4f(U.xa, 1, 0, 0, 1); gl.uniform4f(U.xt, 0, 0, 1, 0); gl.uniform1f(U.nolay, 0);
+    gl.uniform4f(U.hl, 0, 0, 0, 0); gl.uniformMatrix4fv(U.X, false, MAT_ID); gl.uniform1f(U.nolay, 0);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.layerTex); gl.uniform1i(U.layers, 0);
   }
   // Sahneyi verilen kamerayla çiz (ekran veya PNG dışa aktarımı için)
@@ -549,6 +570,7 @@ class Renderer {
       gl.disable(gl.POLYGON_OFFSET_FILL);
     }
     // çizgiler ve noktalar
+    if (!this.edges && solid) { gl.disable(gl.DEPTH_TEST); return; }
     gl.useProgram(this.prog);
     this.setCommon(this.u, cam, psize);
     this.setConstInstance();
@@ -573,9 +595,9 @@ class Renderer {
     const gl = this.gl, S = this.store;
     if (!S.selList.length) return;
     if (this.hl.dirty) this.buildHighlight();
-    const hc = this.dark ? [1.0, 0.62, 0.15] : [0.9, 0.35, 0.0], x = this.xf;
+    const hc = this.dark ? [1.0, 0.62, 0.15] : [0.9, 0.35, 0.0];
     gl.uniform4f(this.u.hl, hc[0], hc[1], hc[2], 1);
-    gl.uniform4f(this.u.xa, x[0], x[1], x[2], x[3]); gl.uniform4f(this.u.xt, x[4], x[5], x[6], x[7]);
+    gl.uniformMatrix4fv(this.u.X, false, xfMat4(this.xf));
     gl.uniform1f(this.u.psize, 5 * this.dpr);
     this.setConstInstance();
     for (const [c, h] of this.hl.chunks) {
@@ -591,7 +613,7 @@ class Renderer {
     }
     gl.bindVertexArray(null);
     gl.uniform1f(this.u.bflat, 0);
-    gl.uniform4f(this.u.hl, 0, 0, 0, 0); gl.uniform4f(this.u.xa, 1, 0, 0, 1); gl.uniform4f(this.u.xt, 0, 0, 1, 0);
+    gl.uniform4f(this.u.hl, 0, 0, 0, 0); gl.uniformMatrix4fv(this.u.X, false, MAT_ID);
   }
   draw() {
     const gl = this.gl, dpr = this.dpr;
@@ -619,9 +641,12 @@ class Renderer {
     return this.drawTexts3D(ctx, cam, limit, withSel);
   }
   // seçili yazının önizleme dönüşümü: [x, y, z, hk, dr]
-  xfText(x, y, z) {
-    const X = this.xf;
-    return [X[0] * x + X[1] * y + X[4], X[2] * x + X[3] * y + X[5], X[6] * z + X[7], Math.sqrt(Math.abs(X[0] * X[3] - X[1] * X[2])), Math.atan2(X[2], X[0])];
+  xfText(x, y, z, r) {
+    const T = this.xf, M = T.length === 12 ? T : [T[0], T[1], 0, T[4], T[2], T[3], 0, T[5], 0, 0, T[6], T[7]];
+    const c = Math.cos(r || 0), s = Math.sin(r || 0);
+    const dx = M[0] * c + M[1] * s, dy = M[4] * c + M[5] * s, ux = -M[0] * s + M[1] * c, uy = -M[4] * s + M[5] * c, uz = -M[8] * s + M[9] * c;
+    return [M[0] * x + M[1] * y + M[2] * z + M[3], M[4] * x + M[5] * y + M[6] * z + M[7], M[8] * x + M[9] * y + M[10] * z + M[11],
+      Math.hypot(ux, uy, uz), Math.atan2(dy, dx) - (r || 0)];
   }
   drawTexts2D(ctx, W, H, cx, cy, scale, limit, withSel) {
     const S = this.store, X = S.TX, n = S.nText;
@@ -631,13 +656,13 @@ class Renderer {
     const hc = this.dark ? '#ff9e26' : '#e65a00';
     const minPx = 3, x0 = cx - W / 2 / scale, x1 = cx + W / 2 / scale, y0 = cy - H / 2 / scale, y1 = cy + H / 2 / scale;
     let drawn = 0, skipped = 0, lastFont = -1, lastCol = '';
-    const moving = this.xf !== XF_ID && (this.xf[0] !== 1 || this.xf[1] !== 0 || this.xf[2] !== 0 || this.xf[3] !== 1 || this.xf[4] !== 0 || this.xf[5] !== 0);
+    const moving = !xfIsId(this.xf);
     ctx.textBaseline = 'alphabetic';
     for (let i = 0; i < n; i++) {
       if (hid[i] || !vis[la[i]]) continue;
       let x = xa[i], y = ya[i], h = ha[i], r = ra[i];
       const isSel = withSel && sel[ea[i]];
-      if (isSel && moving) { const q = this.xfText(x, y, 0); x = q[0]; y = q[1]; h *= q[3]; r += q[4]; }
+      if (isSel && moving) { const q = this.xfText(x, y, 0, r); x = q[0]; y = q[1]; h *= q[3]; r += q[4]; }
       const hp = h * scale;
       if (hp < minPx) continue;
       const str = TS[i];
@@ -686,7 +711,7 @@ class Renderer {
       if (hid[i] || !vis[la[i]]) continue;
       let x = xa[i], y = ya[i], z = za[i], h = ha[i], r = ra[i];
       const isSel = withSel && sel[ea[i]];
-      if (isSel) { const q = this.xfText(x, y, z); x = q[0]; y = q[1]; z = q[2]; h *= q[3]; r += q[4]; }
+      if (isSel && !xfIsId(this.xf)) { const q = this.xfText(x, y, z, r); x = q[0]; y = q[1]; z = q[2]; h *= q[3]; r += q[4]; }
       if (!cam.project(x, y, z, p0)) continue;
       if (p0[0] < -W || p0[0] > 2 * W || p0[1] < -H || p0[1] > 2 * H) continue;
       const c = Math.cos(r), s = Math.sin(r);

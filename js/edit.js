@@ -22,42 +22,54 @@ class Editor {
   }
   ed(id) { let e = this.S.edits.get(id); if (!e) { e = {}; this.S.edits.set(id, e); } return e; }
 
-  // Varlıklara dönüşüm uygula (göreli koordinat). Yazı açıları için aynalamada okunurluk kuralı.
+  // Varlıklara dönüşüm uygula (göreli koordinat). T: 8 sayılı düzlem dönüşümü ya da 12 sayılı 3×4 (3B afin).
+  // Düzlemsel benzerlikte yazı açıları kesin (aynalamada okunurluk kuralı); genel 3B'de yazılar yaklaşık (konum kesin).
   applyXform(ids, T) {
     const S = this.S, E = S.E, X = S.TX, core = this.core;
-    const [a, b, c, d, e, f, zs, zt] = T, xm = core.xfMake(T), thDeg = xm.th * 180 / Math.PI;
-    const P2 = (A, i) => { const x = A[2 * i], y = A[2 * i + 1]; A[2 * i] = a * x + b * y + e; A[2 * i + 1] = c * x + d * y + f; };
+    const M = core.toM(T), [m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11] = M;
+    const planar = core.mPlanar(M), psim = planar && core.sim2(m0, m1, m4, m5);
+    const xm = psim ? core.xfMake(core.mTo8(M)) : null, thDeg = xm ? xm.th * 180 / Math.PI : 0;
+    const det2 = m0 * m5 - m1 * m4;
+    const P3 = (P, Z, i) => {
+      const x = P[2 * i], y = P[2 * i + 1], z = Z[i];
+      P[2 * i] = m0 * x + m1 * y + m2 * z + m3; P[2 * i + 1] = m4 * x + m5 * y + m6 * z + m7; Z[i] = m8 * x + m9 * y + m10 * z + m11;
+    };
     for (const id of ids) {
       const ch = S.chunks[E.chunk.a[id]], vs = E.vs.a[id], vc = E.vc.a[id];
       if (ch && vc) {
         const pts = (E.flags.a[id] & F_POINTS) !== 0, P = pts ? ch.ppos : ch.pos, Z = pts ? ch.pz : ch.z;
-        for (let v = vs; v < vs + vc; v++) { P2(P, v); Z[v] = zs * Z[v] + zt; }
+        for (let v = vs; v < vs + vc; v++) P3(P, Z, v);
         this.mark(ch, pts ? 'ppos' : 'pos', vs, vs + vc); this.mark(ch, pts ? 'pz' : 'z', vs, vs + vc);
       }
       const rs = E.rs.a[id], rc = E.rc.a[id];
       if (ch && rc) {
-        for (let v = rs; v < rs + rc; v++) { P2(ch.tpos, v); ch.tz[v] = zs * ch.tz[v] + zt; }
+        for (let v = rs; v < rs + rc; v++) P3(ch.tpos, ch.tz, v);
         this.mark(ch, 'tpos', rs, rs + rc); this.mark(ch, 'tz', rs, rs + rc);
       }
       const is = E.is.a[id], ic = E.ic.a[id];
       for (let k = is; k < is + ic; k++) {
-        const B = S.blocks[S.IN.blk.a[k]], s = S.IN.slot.a[k], F = B.f.a, o = s * 8;
-        const m0 = F[o], m1 = F[o + 1], tx = F[o + 2], m3 = F[o + 3], m4 = F[o + 4], ty = F[o + 5];
-        F[o] = a * m0 + b * m3; F[o + 1] = a * m1 + b * m4; F[o + 2] = a * tx + b * ty + e;
-        F[o + 3] = c * m0 + d * m3; F[o + 4] = c * m1 + d * m4; F[o + 5] = c * tx + d * ty + f;
-        if (zs !== 0) B.fz.a[2 * s] *= zs; B.fz.a[2 * s + 1] = zs * B.fz.a[2 * s + 1] + zt;
-        B.instDirty = true;
+        const B = S.blocks[S.IN.blk.a[k]], sl = S.IN.slot.a[k], I = S.instM(B, sl), R = core.mMul(M, I);
+        if (planar && m10 === 0) R[10] = I[10];   // kot atamada blok iç Z ölçeği korunur (DXF yamasıyla aynı)
+        S.setInstM(B, sl, R);
       }
       const ts = E.ts.a[id], tc = E.tc.a[id];
       for (let t = ts; t < ts + tc; t++) {
-        const x = X.x.a[t], y = X.y.a[t];
-        X.x.a[t] = a * x + b * y + e; X.y.a[t] = c * x + d * y + f; X.z.a[t] = zs * X.z.a[t] + zt;
-        X.h.a[t] *= xm.sc;
-        const deg = X.r.a[t] * 180 / Math.PI;
+        const x = X.x.a[t], y = X.y.a[t], z = X.z.a[t], rr = X.r.a[t];
+        X.x.a[t] = m0 * x + m1 * y + m2 * z + m3; X.y.a[t] = m4 * x + m5 * y + m6 * z + m7; X.z.a[t] = m8 * x + m9 * y + m10 * z + m11;
+        const deg = rr * 180 / Math.PI;
         let nd;
-        if (!xm.mir) nd = deg + thDeg;
-        else if (X.al.a[t] & 64) { nd = core.xfAng(xm, deg); if (Math.cos(nd * Math.PI / 180) < -1e-9) nd += 180; }
-        else nd = core.xfTextAng(xm, deg);
+        if (psim) {
+          X.h.a[t] *= xm.sc;
+          if (!xm.mir) nd = deg + thDeg;
+          else if (X.al.a[t] & 64) { nd = core.xfAng(xm, deg); if (Math.cos(nd * Math.PI / 180) < -1e-9) nd += 180; }
+          else nd = core.xfTextAng(xm, deg);
+        } else {
+          const c = Math.cos(rr), sn = Math.sin(rr);
+          const dx = m0 * c + m1 * sn, dy = m4 * c + m5 * sn;
+          X.h.a[t] *= Math.hypot(-m0 * sn + m1 * c, -m4 * sn + m5 * c, -m8 * sn + m9 * c) || 1;
+          nd = (Math.hypot(dx, dy) > 1e-12 ? Math.atan2(dy, dx) : rr) * 180 / Math.PI;
+          if (det2 < 0) { const d0 = Math.abs(((nd - deg) % 360 + 540) % 360 - 180); if (d0 > 90) nd += 180; }
+        }
         X.r.a[t] = nd * Math.PI / 180;
       }
       S.recomputeBBox(id);
@@ -65,6 +77,8 @@ class Editor {
       const ed = this.ed(id); ed.T = core.xfCompose(T, ed.T || T_ID);
     }
   }
+  // Dönüşüm aynalama mı (düzlemde, determinant < 0) — eski yol taramaları aynalayamaz
+  isMirror(T) { const M = this.core.toM(T); return this.core.mPlanar(M) && M[0] * M[5] - M[1] * M[4] < 0; }
   setDeleted(ids, del) {
     const S = this.S, E = S.E;
     for (const id of ids) {
@@ -129,11 +143,12 @@ class Editor {
   }
   // T göreli koordinatta (orijin çıkarılmış)
   xform(ids, T, kind, label) {
+    if (kind !== 'mirror' && this.isMirror(T)) kind = 'mirror';
     ids = this.transformable(ids, kind || 'move'); if (!ids.length || this.core.xfIdentity(T)) return false;
     const S = this.S, X = S.TX, E = S.E;
     const oldT = ids.map(id => { const e = S.edits.get(id); return e && e.T ? e.T.slice() : undefined; });
-    // geri almada kesin dönüş için yazı açılarının yedeği
-    const tr = []; for (const id of ids) for (let t = E.ts.a[id]; t < E.ts.a[id] + E.tc.a[id]; t++) tr.push(t, X.r.a[t]);
+    // geri almada kesin dönüş için yazı açısı ve yüksekliklerinin yedeği
+    const tr = []; for (const id of ids) for (let t = E.ts.a[id]; t < E.ts.a[id] + E.tc.a[id]; t++) tr.push(t, X.r.a[t], X.h.a[t]);
     const inv = this.core.xfInverse(T);
     this.exec({
       label: label || (ids.length + ' nesne dönüştürüldü'),
@@ -141,7 +156,8 @@ class Editor {
       undo: () => {
         this.applyXform(ids, inv);
         ids.forEach((id, i) => { const e = this.ed(id); if (oldT[i]) e.T = oldT[i]; else delete e.T; });
-        for (let k = 0; k < tr.length; k += 2) X.r.a[tr[k]] = tr[k + 1];
+        for (let k = 0; k < tr.length; k += 3) { X.r.a[tr[k]] = tr[k + 1]; X.h.a[tr[k]] = tr[k + 2]; }
+        for (const id of ids) S.recomputeBBox(id);
       }
     });
     return true;
@@ -155,7 +171,7 @@ class Editor {
       const o = { T: S.edits.get(id) && S.edits.get(id).T ? S.edits.get(id).T.slice() : undefined, zr: [E.zr.a[2 * id], E.zr.a[2 * id + 1]] };
       if (ch && vc) o.z = (pts ? ch.pz : ch.z).slice(vs, vs + vc);
       if (ch && rc) o.tz = ch.tz.slice(rs, rs + rc);
-      o.fz = []; for (let k = E.is.a[id]; k < E.is.a[id] + E.ic.a[id]; k++) { const B = S.blocks[S.IN.blk.a[k]], s2 = S.IN.slot.a[k]; o.fz.push(B.fz.a[2 * s2 + 1]); }
+      o.im = []; for (let k = E.is.a[id]; k < E.is.a[id] + E.ic.a[id]; k++) o.im.push(S.instM(S.blocks[S.IN.blk.a[k]], S.IN.slot.a[k]));
       o.txz = []; for (let t = E.ts.a[id]; t < E.ts.a[id] + E.tc.a[id]; t++) o.txz.push(X.z.a[t]);
       return o;
     });
@@ -167,7 +183,7 @@ class Editor {
         const o = snap[i], ch = S.chunks[E.chunk.a[id]], vs = E.vs.a[id], pts = (E.flags.a[id] & F_POINTS) !== 0, rs = E.rs.a[id];
         if (o.z) { (pts ? ch.pz : ch.z).set(o.z, vs); this.mark(ch, pts ? 'pz' : 'z', vs, vs + o.z.length); }
         if (o.tz) { ch.tz.set(o.tz, rs); this.mark(ch, 'tz', rs, rs + o.tz.length); }
-        let j = 0; for (let k = E.is.a[id]; k < E.is.a[id] + E.ic.a[id]; k++) { const B = S.blocks[S.IN.blk.a[k]], s2 = S.IN.slot.a[k]; B.fz.a[2 * s2 + 1] = o.fz[j++]; B.instDirty = true; }
+        let j = 0; for (let k = E.is.a[id]; k < E.is.a[id] + E.ic.a[id]; k++) S.setInstM(S.blocks[S.IN.blk.a[k]], S.IN.slot.a[k], o.im[j++]);
         j = 0; for (let t = E.ts.a[id]; t < E.ts.a[id] + E.tc.a[id]; t++) X.z.a[t] = o.txz[j++];
         E.zr.a[2 * id] = o.zr[0]; E.zr.a[2 * id + 1] = o.zr[1];
         const e = this.ed(id); if (o.T) e.T = o.T; else delete e.T;
@@ -228,6 +244,51 @@ class Editor {
       undo: () => ids.forEach((id, i) => { const o = old[i]; this.applyLayer(id, o.l); this.applyColor(id, o.c); this.ed(id).layer = o.e; })
     });
   }
+
+  // ── katman komutları (geri alınabilir). Katman özellikleri kaydedilirken LAYER tablosu yerinde güncellenir.
+  // Katman rengini uygula: ByLayer nesneler, blok örnekleri ve blok içindeki o katmandaki çizgiler yeniden boyanır.
+  setLayerColor(li, aci, rgba) {
+    const S = this.S, E = S.E, L = S.layers[li], prev = L.rgba;
+    L.aci = aci; L.rgba = rgba;
+    const fl = E.flags.a, la = E.layer.a;
+    for (let id = 0; id < S.nEnt; id++) if (la[id] === li && (fl[id] & F_BYLAYER)) this.applyColor(id, rgba);
+    // blok örnekleri: örnek katman rengi (blok içindeki 0 katmanı çizgileri bunu alır)
+    for (const B of S.blocks) {
+      if (!B) continue;
+      for (let sl = 0; sl < B.n; sl++) if (B.f.a[sl * 8 + 6] === li) { B.c.a[sl * 2 + 1] = rgba; B.instDirty = true; }
+      // blok tanımında bu katmandaki ByLayer çizgiler (önceki renkle pişirilmiş)
+      let ch = false;
+      const re = (C, Lr, n) => { if (!C) return; for (let v = 0; v < n; v++) if (Lr[v] === li && C[v] === prev) { C[v] = rgba; ch = true; } };
+      re(B.col, B.lay, B.nV); re(B.pcol, B.play, B.nP); re(B.tcol, B.tlay, B.nT);
+      if (ch) B.geomDirty = true;
+    }
+    // bloklardan açılan yazılar
+    const X = S.TX, TN = this.core.TYPE_NAMES;
+    for (let t = 0; t < S.nText; t++) if (X.lay.a[t] === li && X.col.a[t] === prev && TN[E.type.a[X.ent.a[t]]] === 'INSERT') X.col.a[t] = rgba;
+    this.R.hl.dirty = true;
+  }
+  layerProps(li, props, label) {
+    const S = this.S, L = S.layers[li];
+    const keys = Object.keys(props), old = {}; for (const k of keys) old[k] = L[k];
+    const oldMod = { mod: L.mod, colorChanged: L.colorChanged };
+    const apply = (P) => {
+      if (P.aci !== undefined && P.aci !== L.aci) this.setLayerColor(li, P.aci, this.core.aciToRgba(P.aci));
+      for (const k of keys) if (k !== 'aci' && k !== 'rgba') L[k] = P[k];
+    };
+    this.exec({
+      label: label || ('"' + L.name + '" katmanı değişti'),
+      do: () => { apply(props); L.mod = true; if (props.aci !== undefined) L.colorChanged = true; this.R.updateLayers(); },
+      undo: () => { apply(old); L.mod = oldMod.mod; L.colorChanged = oldMod.colorChanged; this.R.updateLayers(); }
+    });
+  }
+  layerColor(li, aci) { this.layerProps(li, { aci }, '"' + this.S.layers[li].name + '" katman rengi: ACI ' + aci); }
+  layerRename(li, name) { this.layerProps(li, { name }, 'Katman yeniden adlandırıldı: "' + this.S.layers[li].name + '" → "' + name + '"'); }
+  layerLock(li, locked) {
+    const S = this.S;
+    if (locked) { const keep = S.selList.filter(id => S.E.layer.a[id] !== li); if (keep.length !== S.selList.length) { S.setSel(keep, 'set'); this.app.selChanged(); } }
+    this.layerProps(li, { locked }, '"' + S.layers[li].name + '" katmanı ' + (locked ? 'kilitlendi' : 'kilidi açıldı'));
+  }
+  layerDelete(li) { this.layerProps(li, { deleted: true }, '"' + this.S.layers[li].name + '" katmanı silindi'); }
 
   // ── yeni nesneler
   editChunk() {
@@ -355,7 +416,7 @@ class Editor {
   }
   // Kopyala ve T ile dönüştür (göreli). Dönüş: yeni id'ler
   copy(ids, dx, dy, T) {
-    ids = this.transformable(ids, T && this.core.xfMake(T).mir ? 'mirror' : 'move'); if (!ids.length) return [];
+    ids = this.transformable(ids, T && this.isMirror(T) ? 'mirror' : 'move'); if (!ids.length) return [];
     if (!T) T = [1, 0, 0, 1, dx || 0, dy || 0, 1, 0];
     const S = this.S, E = S.E, X = S.TX;
     const out = [];
@@ -384,10 +445,11 @@ class Editor {
       const is = S.nInst; let ic = 0;
       for (let k = E.is.a[src]; k < E.is.a[src] + E.ic.a[src]; k++) {
         const b = S.IN.blk.a[k], B = S.blocks[b], o = S.IN.slot.a[k] * 8;
-        B.f.ensure(8); B.c.ensure(2); B.fz.ensure(2);
+        B.f.ensure(8); B.c.ensure(2); B.fz.ensure(2); B.fx.ensure(4);
         const f = B.f.a, n = B.f.n;
         for (let j = 0; j < 8; j++) f[n + j] = f[o + j];
         B.f.n += 8;
+        const xo = S.IN.slot.a[k] * 4; for (let j = 0; j < 4; j++) B.fx.a[B.fx.n + j] = B.fx.a[xo + j]; B.fx.n += 4;
         const so = S.IN.slot.a[k] * 2; B.fz.a[B.fz.n] = B.fz.a[so]; B.fz.a[B.fz.n + 1] = B.fz.a[so + 1]; B.fz.n += 2;
         B.c.a[B.c.n] = B.c.a[S.IN.slot.a[k] * 2]; B.c.a[B.c.n + 1] = B.c.a[S.IN.slot.a[k] * 2 + 1]; B.c.n += 2;
         S.IN.blk.push(b); S.IN.slot.push(B.n); S.IN.ent.push(newId); B.n++; B.instDirty = true; S.nInst++; ic++;

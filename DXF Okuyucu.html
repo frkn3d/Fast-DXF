@@ -98,7 +98,7 @@
   .mini:hover { border-color: var(--accent); }
   .mini.pri { background: var(--accent2); border-color: var(--accent); color: #fff; }
   #layers { flex: 1; overflow: auto; min-height: 0; border-top: 1px solid var(--line); }
-  .lay { display: grid; grid-template-columns: 22px 14px 1fr auto; align-items: center; gap: 6px; padding: 3px 10px; cursor: pointer; user-select: none; }
+  .lay { display: grid; grid-template-columns: 18px 18px 14px 1fr auto; align-items: center; gap: 6px; padding: 3px 10px; cursor: pointer; user-select: none; }
   .lay:hover { background: var(--panel2); }
   .lay.cur { background: #1f2d47; }
   .lay .sw { width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(255,255,255,.25); }
@@ -108,6 +108,14 @@
   .eye { width: 18px; height: 18px; border: 0; background: transparent; cursor: pointer; padding: 0; color: var(--text); }
   .eye svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.7; }
   .lay.off .eye { color: var(--muted); }
+  .lay .lk { color: var(--muted); opacity: .55; }
+  .lay .lk:hover { opacity: 1; }
+  .lay .lk.on { color: var(--warn); opacity: 1; }
+  .lay.locked .nm { color: var(--muted); }
+  .lay .sw { cursor: pointer; }
+  .lay .sw:hover { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .aci.std { grid-template-columns: repeat(9, 22px); margin-bottom: 8px; }
+  .aci.std i { width: 22px; height: 22px; }
 
   #view { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #1b1e23; }
   #view > canvas { position: absolute; left: 0; top: 0; }
@@ -400,6 +408,7 @@
           <div style="display:flex;gap:2px">
             <button class="chk" id="o3ZCol" data-cmd="zcolor">Kota göre renk</button>
             <button class="chk" id="o3Persp" data-cmd="persp">Perspektif</button>
+            <button class="chk on" id="o3Edges" data-cmd="edges" title="Tel kafes çizgilerini (kenarları) göster / gizle — gizliyken yalnız yüzeyler görünür">Kenarlar</button>
           </div>
         </div>
         <div class="dd" id="dd3D">
@@ -438,7 +447,7 @@
         <button class="mini" id="layNone" title="Tüm katmanları gizle">Hepsi kapalı</button>
         <button class="mini" id="layInv" title="Görünürlüğü ters çevir">Ters</button>
       </div>
-      <div class="row" style="font-size:11px;color:var(--muted);padding-top:0">Tık: aktif katman · Çift tık: yalnız bu · Sağ tık: menü</div>
+      <div class="row" style="font-size:11px;color:var(--muted);padding-top:0">Tık: aktif · çift tık: yalnız bu · renk kutusu: renk · kilit · sağ tık: ad, sil…</div>
       <div id="layers"></div>
     </aside>
 
@@ -448,9 +457,9 @@
       <div id="drop"><div class="big2">DXF dosyasını buraya sürükleyin</div><div>ya da <b>Dosya → Aç</b> (Ctrl+O)</div><div style="font-size:12px;max-width:520px">1 GB ve üzeri dosyalar parça parça okunur; okuma sırasında çizim kademeli olarak görünür. Orijinal dosyanız değiştirilmez.</div></div>
       <div id="prog"><div id="progText">Okunuyor…</div><div class="bar"><i id="progBar"></i></div></div>
       <div id="gzBar">
-        <button data-gizmo="move" title="Seçimi oklarla taşı (X/Y/Z)"><svg class="i"><use href="#i-move"/></svg>Taşı</button>
-        <button data-gizmo="rotate" title="Seçimi Z ekseninde döndür"><svg class="i"><use href="#i-rotate"/></svg>Döndür</button>
-        <button data-gizmo="scale" title="Seçimi ölçekle (merkez: XYZ, X/Y: XY, Z: yalnız Z)"><svg class="i"><use href="#i-scale"/></svg>Ölçekle</button>
+        <button data-gizmo="move" title="Taşı — ok: tek eksen · kare: düzlem (XY/YZ/XZ) · merkez: ekran düzleminde serbest · Shift: adımlı"><svg class="i"><use href="#i-move"/></svg>Taşı</button>
+        <button data-gizmo="rotate" title="Döndür — X/Y/Z halkaları · dış halka: ekran ekseni · Shift: 15° adım"><svg class="i"><use href="#i-rotate"/></svg>Döndür</button>
+        <button data-gizmo="scale" title="Ölçekle — eksen ucu: tek eksen · şerit: iki eksen · merkez: orantılı · Shift: 0,1 adım"><svg class="i"><use href="#i-scale"/></svg>Ölçekle</button>
         <span class="sep"></span>
         <button data-gizmo="off" title="Tutamacı gizle"><svg class="i"><use href="#i-gizmo"/></svg>Gizle</button>
       </div>
@@ -478,6 +487,7 @@
 <div id="ctx"></div>
 <input type="file" id="fileIn" accept=".dxf,.DXF" style="display:none">
 
+<script src="js/registry.js"></script>
 <script src="js/dxf-core.js"></script>
 <script src="js/template.js"></script>
 <script src="js/workers.js"></script>
@@ -488,6 +498,7 @@
 <script src="js/edit.js"></script>
 <script src="js/gizmo.js"></script>
 <script src="js/export.js"></script>
+<script src="js/layers-ui.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

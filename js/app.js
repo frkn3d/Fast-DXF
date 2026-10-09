@@ -111,12 +111,27 @@ class App {
     this.R.onDraw = () => this.afterDraw();
     this.R.setTheme(this.settings.theme !== 'light');
     this.vc = new ViewCube(this, $('view'));
-    this.applySettings();
     this.initTools();
+    for (const pl of FastDXF.plugins) { try { pl.init(this); } catch (e) { console.error('Eklenti başlatılamadı: ' + pl.name, e); } }
+    this.applySettings();
     this.bind();
     this.setTool('select');
     new ResizeObserver(() => { this.R.resize(); }).observe($('view'));
     this.updateButtons(); this.update3DUI(); this.updateDoc();
+  }
+
+  // ───────────── eklenti bağlantı noktaları
+  // Komut ekle: aliases (dizi), ad, açıklama, grup; fn(app) verilirse komut doğrudan çalışır, verilmezse aynı adlı araç açılır
+  addCommand(aliases, name, label, group, fn) {
+    const c = [aliases, fn ? 'f' : 't', name, label, group, fn];
+    COMMANDS.push(c); for (const a of aliases) ALIAS.set(a, c);
+  }
+  // Araç ekle: opts.plan → yalnız plan görünümde; opts.draw → Çiz menüsü aracı
+  addTool(name, tool, opts) {
+    opts = opts || {};
+    this.tools[name] = tool;
+    if (opts.plan) PLAN_TOOLS.add(name);
+    if (opts.draw) { DRAW_TOOLS.push(name); TOOL_ICON[name] = opts.icon || 'line'; }
   }
 
   // ───────────── yardımcı diyaloglar
@@ -126,6 +141,12 @@ class App {
     const f = $('dlg').querySelector('input,select,button.pri'); if (f) setTimeout(() => { if (f.isConnected) { f.focus(); if (f.select && f.type === 'text') f.select(); } }, 30);
   }
   closeModal() { $('modal').classList.remove('show'); $('dlg').innerHTML = ''; }
+  // Esc / pencere dışına tıklama: "Vazgeç" varsa o, tek düğmeli bilgi penceresinde "Tamam/Kapat", yoksa kapat
+  dismissModal() {
+    const d = $('dlg'), no = d.querySelector('#mNo'); if (no) { no.click(); return; }
+    const ok = d.querySelector('#mOk'); if (ok && d.querySelectorAll('.btns button').length === 1) { ok.click(); return; }
+    this.closeModal();
+  }
   alert(msg) {
     return new Promise(res => this.modal('<h2>Bilgi</h2><div style="max-width:520px">' + esc(msg) + '</div><div class="btns"><button class="btn pri" id="mOk">Tamam</button></div>',
       d => { d.querySelector('#mOk').onclick = () => { this.closeModal(); res(); }; }));
@@ -243,26 +264,6 @@ class App {
   }
 
   // ───────────── katman paneli
-  renderLayers() {
-    const S = this.store, q = ($('laySearch').value || '').toLocaleLowerCase('tr');
-    const idx = S.layers.map((L, i) => i).filter(i => S.layers[i] && (!q || S.layers[i].name.toLocaleLowerCase('tr').includes(q)));
-    idx.sort((a, b) => S.layers[a].name.localeCompare(S.layers[b].name, 'tr', { numeric: true }));
-    const eyeOn = '<svg viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
-    const eyeOff = '<svg viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 6.1A10 10 0 0112 6c7 0 11 6 11 6a17 17 0 01-3.3 3.9M6.3 6.3C3 8.4 1 12 1 12s4 7 11 7a10 10 0 005.7-1.7"/></svg>';
-    const parts = [];
-    for (const i of idx.slice(0, 5000)) {
-      const L = S.layers[i], on = S.layerVis[i];
-      parts.push('<div class="lay' + (on ? '' : ' off') + (i === this.curLayer ? ' cur' : '') + '" data-i="' + i + '" title="' + esc(L.name) + (L.locked ? ' (kilitli)' : '') + '">' +
-        '<button class="eye" data-eye="1">' + (on ? eyeOn : eyeOff) + '</button><span class="sw" style="background:' + this.R.colorCss(L.rgba) + '"></span>' +
-        '<span class="nm">' + esc(L.name) + '</span><span class="ct">' + fmtN(L.count || 0) + '</span></div>');
-    }
-    $('layers').innerHTML = parts.join('');
-    $('layCount').textContent = S.layers.length ? '(' + S.layers.length + ')' : '';
-    // aktif katman seçici
-    const sel = $('curLayer'), sorted = S.layers.map((L, i) => [L.name, i]).sort((a, b) => a[0].localeCompare(b[0], 'tr', { numeric: true }));
-    sel.innerHTML = sorted.length ? sorted.map(([n, i]) => '<option value="' + i + '"' + (i === this.curLayer ? ' selected' : '') + '>' + esc(n) + '</option>').join('') : '<option>—</option>';
-  }
-  setCurLayer(i) { this.curLayer = i; this.renderLayers(); }
   setLayerVis(fn) {
     const S = this.store;
     for (let i = 0; i < S.layers.length; i++) S.layerVis[i] = fn(i, S.layerVis[i]) ? 1 : 0;
@@ -349,8 +350,8 @@ class App {
     html += '</table>' +
       '<div class="card"><div class="ch">Dönüşüm<span style="text-transform:none;letter-spacing:0;font-weight:400">merkez ' + fmtC(ca[0]) + ' ; ' + fmtC(ca[1]) + '</span></div><div class="cb">' +
       '<div class="xr"><span class="k">Taşı</span><div class="inp c3"><input id="tDX" class="ax-x" placeholder="ΔX"><input id="tDY" class="ax-y" placeholder="ΔY"><input id="tDZ" class="ax-z" placeholder="ΔZ"></div><button class="mini" id="tMove">Uygula</button></div>' +
-      '<div class="xr"><span class="k">Döndür</span><div class="inp"><input id="tRot" placeholder="açı (°), + saat yönü tersi"></div><button class="mini" id="tRotB">Uygula</button></div>' +
-      '<div class="xr"><span class="k">Ölçekle</span><div class="inp" style="grid-template-columns:1fr 1fr"><input id="tSc" placeholder="XY çarpanı"><input id="tScZ" class="ax-z" placeholder="Z çarpanı"></div><button class="mini" id="tScB">Uygula</button></div>' +
+      '<div class="xr"><span class="k">Döndür °</span><div class="inp c3"><input id="tRX" class="ax-x" placeholder="X" title="X ekseni etrafında (°)"><input id="tRY" class="ax-y" placeholder="Y" title="Y ekseni etrafında (°)"><input id="tRot" class="ax-z" placeholder="Z" title="Z ekseni etrafında (°), + saat yönü tersi"></div><button class="mini" id="tRotB">Uygula</button></div>' +
+      '<div class="xr"><span class="k">Ölçekle</span><div class="inp c3"><input id="tSc" class="ax-x" placeholder="X" title="X çarpanı (yalnız bu doluysa tüm eksenler)"><input id="tScY" class="ax-y" placeholder="Y" title="Y çarpanı"><input id="tScZ" class="ax-z" placeholder="Z" title="Z çarpanı"></div><button class="mini" id="tScB">Uygula</button></div>' +
       '<div class="xr"><span class="k">Ayna</span><div class="inp" style="grid-template-columns:1fr 1fr"><button class="mini" id="tMirV" title="Merkezden geçen dikey eksene göre">↔ Dikey eksen</button><button class="mini" id="tMirH" title="Merkezden geçen yatay eksene göre">↕ Yatay eksen</button></div><span></span></div>' +
       '<div class="xr"><span class="k">Kot ata</span><div class="inp"><input id="tZ" class="ax-z" placeholder="Z değeri (düzleştir)"></div><button class="mini" id="tZB">Uygula</button></div>' +
       '</div></div>' +
@@ -365,11 +366,26 @@ class App {
     const sel = () => S.selList.slice(), ed = this.editor, gz = () => this.gizmo.origin();
     const enter = (ids2, fn) => ids2.forEach(i => { const el = $(i); if (el) el.onkeydown = (e) => { if (e.key === 'Enter') fn(); e.stopPropagation(); }; });
     const doMove = () => { const dx = num($('tDX').value) || 0, dy = num($('tDY').value) || 0, dz = num($('tDZ').value) || 0; if (dx || dy || dz) { ed.move(sel(), dx, dy, dz); this.afterXform(); } };
-    const doRot = () => { const a = num($('tRot').value); if (a) { const c2 = gz(); ed.rotate(sel(), c2[0], c2[1], a); this.afterXform(); } };
-    const doSc = () => { const k = num($('tSc').value), kz = num($('tScZ').value); const K = k > 0 ? k : 1, KZ = kz > 0 ? kz : (k > 0 ? k : 1); if (K !== 1 || KZ !== 1) { const c2 = gz(); ed.scale(sel(), c2[0], c2[1], c2[2], K, KZ); this.afterXform(); } };
+    const doRot = () => {
+      const ax = num($('tRX').value) || 0, ay = num($('tRY').value) || 0, az = num($('tRot').value) || 0, c2 = gz();
+      if (!ax && !ay) { if (az) { ed.rotate(sel(), c2[0], c2[1], az); this.afterXform(); } return; }
+      // X, sonra Y, sonra Z (merkez etrafında)
+      let M = gzRot(c2, [1, 0, 0], ax * Math.PI / 180);
+      M = this.core.mMul(gzRot(c2, [0, 1, 0], ay * Math.PI / 180), M); M = this.core.mMul(gzRot(c2, [0, 0, 1], az * Math.PI / 180), M);
+      ed.xform(sel(), M, 'rotate', S.selList.length + ' nesne döndürüldü (X ' + ax + '°, Y ' + ay + '°, Z ' + az + '°)'); this.afterXform();
+    };
+    const doSc = () => {
+      const kx = num($('tSc').value), ky = num($('tScY').value), kz = num($('tScZ').value), c2 = gz();
+      const X = kx > 0 ? kx : 1, onlyX = kx > 0 && !(ky > 0) && !(kz > 0);
+      const Y = onlyX ? X : (ky > 0 ? ky : 1), Z = onlyX ? X : (kz > 0 ? kz : 1);
+      if (X === 1 && Y === 1 && Z === 1) return;
+      if (X === Y) ed.scale(sel(), c2[0], c2[1], c2[2], X, Z);
+      else ed.xform(sel(), gzScale(c2, X, Y, Z), 'scale', S.selList.length + ' nesne ölçeklendi (X ' + X + ', Y ' + Y + ', Z ' + Z + ')');
+      this.afterXform();
+    };
     const doZ = () => { const z = num($('tZ').value); if (isFinite(z)) { ed.flatten(sel(), z); this.afterXform(); } };
     $('tMove').onclick = doMove; $('tRotB').onclick = doRot; $('tScB').onclick = doSc; $('tZB').onclick = doZ;
-    enter(['tDX', 'tDY', 'tDZ'], doMove); enter(['tRot'], doRot); enter(['tSc', 'tScZ'], doSc); enter(['tZ'], doZ);
+    enter(['tDX', 'tDY', 'tDZ'], doMove); enter(['tRX', 'tRY', 'tRot'], doRot); enter(['tSc', 'tScY', 'tScZ'], doSc); enter(['tZ'], doZ);
     $('tMirV').onclick = () => { const c2 = gz(); ed.xform(sel(), ed.mirrorT(c2[0], c2[1], c2[0], c2[1] + 1), 'mirror', S.selList.length + ' nesne aynalandı'); this.afterXform(); };
     $('tMirH').onclick = () => { const c2 = gz(); ed.xform(sel(), ed.mirrorT(c2[0], c2[1], c2[0] + 1, c2[1]), 'mirror', S.selList.length + ' nesne aynalandı'); this.afterXform(); };
     $('pLayer').onchange = (e) => { if (e.target.value !== '') this.editor.layer(S.selList.slice(), +e.target.value); };
@@ -484,7 +500,14 @@ class App {
     R.request(); this.update3DUI();
     if (R.zcolor && !S.has3D) this.toast('Bu çizimde kot (Z) bilgisi yok; tüm nesneler aynı renkte görünür.', 4000);
   }
+  // Kenar (tel kafes) çizgileri: yüzeyli stillerde kapatılabilir; tel kafeste kapatmak gölgeliye geçirir
+  toggleEdges() {
+    const R = this.R; R.edges = !R.edges;
+    if (!R.edges && R.style === 'wire') { R.style = 'shaded'; this.toast('Çizgiler gizlendi; yüzeyler gölgeli gösteriliyor.'); }
+    R.request(); this.update3DUI();
+  }
   setStyle(s) {
+    if (s === 'wire') this.R.edges = true;
     this.R.style = s; this.R.request(); this.update3DUI();
     const S = this.store;
     if (s !== 'wire' && !S.nTri && !S.surfaces.length) this.toast('Bu çizimde yüzey (3DFACE, kafes, kalınlık) yok. Haritalar için "Arazi yüzeyi" ile noktalardan yüzey oluşturabilirsiniz.', 6000);
@@ -502,11 +525,11 @@ class App {
     document.querySelectorAll('[data-view]').forEach(b => { const v = VIEWS[b.dataset.view]; b.classList.toggle('on', Math.abs(R.az - v[0]) < 0.01 && Math.abs(R.el - v[1]) < 0.01); });
     document.querySelectorAll('[data-zs]').forEach(b => b.classList.toggle('on', +b.dataset.zs === R.zs));
     document.querySelectorAll('[data-style]').forEach(b => b.classList.toggle('on', b.dataset.style === R.style));
-    $('o3Persp').classList.toggle('on', R.persp); $('o3ZCol').classList.toggle('on', R.zcolor); $('o3Flat').classList.toggle('on', R.blockFlat);
+    $('o3Persp').classList.toggle('on', R.persp); $('o3Edges').classList.toggle('on', R.edges); $('o3ZCol').classList.toggle('on', R.zcolor); $('o3Flat').classList.toggle('on', R.blockFlat);
     const lg = $('zlegend');
     if (R.zcolor) { lg.style.display = 'block'; $('zlMin').textContent = fmtC(R.zcr[0]); $('zlMax').textContent = fmtC(R.zcr[1]); }
     else lg.style.display = 'none';
-    const st = { wire: '', hidden: ' · gizli çizgi', shaded: ' · gölgeli' }[R.style];
+    const st = { wire: '', hidden: ' · gizli çizgi', shaded: ' · gölgeli' }[R.style] + (R.edges ? '' : ' · kenarsız');
     $('viewName').textContent = (R.is2D ? 'Plan' : (Object.values(VIEWS).find(v => Math.abs(R.az - v[0]) < 0.01 && Math.abs(R.el - v[1]) < 0.01) || [0, 0, '3B'])[2]) + (R.persp ? ' · perspektif' : '') + st;
     this.vc.draw();
   }
@@ -1263,9 +1286,9 @@ class App {
       }
       for (let k = E.is.a[id]; k < E.is.a[id] + E.ic.a[id]; k++) {
         const B = S.blocks[S.IN.blk.a[k]]; if (!B || !B.pos || B.nV > 20000) continue;
-        const f = B.f.a, oo = S.IN.slot.a[k] * 8, P = B.pos;
+        const M = S.instM(B, S.IN.slot.a[k]), P = B.pos, Z = B.z;
         for (let v = 0; v < B.nV; v += 2) {
-          const X = (j) => f[oo] * P[2 * j] + f[oo + 1] * P[2 * j + 1] + f[oo + 2], Y = (j) => f[oo + 3] * P[2 * j] + f[oo + 4] * P[2 * j + 1] + f[oo + 5];
+          const X = (j) => M[0] * P[2 * j] + M[1] * P[2 * j + 1] + M[2] * Z[j] + M[3], Y = (j) => M[4] * P[2 * j] + M[5] * P[2 * j + 1] + M[6] * Z[j] + M[7];
           const x1 = X(v), y1 = Y(v), x2 = X(v + 1), y2 = Y(v + 1);
           if (inb(x1, y1, x2, y2)) out.push({ x1: x1 + o[0], y1: y1 + o[1], x2: x2 + o[0], y2: y2 + o[1], id: -1 });
         }
@@ -1544,6 +1567,7 @@ class App {
     const S = this.store, cmd = ALIAS.get(c);
     const name = cmd ? cmd[2] : c;
     if (cmd && cmd[1] === 't') { this.setTool(name); return; }
+    if (cmd && cmd[1] === 'f') { this.lastCmd = name; cmd[5](this); return; }
     this.lastCmd = name;
     switch (name) {
       case 'open': this.openDialog(); return;
@@ -1568,6 +1592,7 @@ class App {
       case 'fit': this.fit(); return;
       case 'home': this.homeView(); return;
       case 'persp': this.togglePersp(); return;
+      case 'edges': this.toggleEdges(); return;
       case 'zcolor': this.toggleZColor(); return;
       case 'flatblocks': this.setBlockFlat(!this.R.blockFlat, true); return;
       case 'surface': this.surfaceDialog(); return;
@@ -1716,37 +1741,10 @@ class App {
   }
 
   // ───────────── katman oluştur
-  newLayerDialog() {
-    const S = this.store; let n = 1; while (S.layers.some(L => L.name.toUpperCase() === ('KATMAN' + n))) n++;
-    let aci = 7, cells = '';
-    for (let i = 1; i < 256; i++) cells += '<i data-aci="' + i + '" title="ACI ' + i + '" style="background:' + this.R.colorCss(this.core.ACI[i]) + (i === 7 ? ';outline:2px solid #fff' : '') + '"></i>';
-    this.modal('<h2>Yeni katman</h2><label>Ad</label><input type="text" id="lN" value="Katman' + n + '"><label>Renk <span id="lC" style="color:var(--text)">ACI 7</span></label><div class="aci" id="lA">' + cells + '</div>' +
-      '<div class="opts" style="margin-top:10px"><label><input type="checkbox" id="lCur" checked> Aktif katman yap</label></div>' +
-      '<div class="btns"><button class="btn" id="mNo">Vazgeç</button><button class="btn pri" id="mOk">Oluştur</button></div>', d => {
-      d.querySelector('#lA').onclick = (e) => { const c = e.target.closest('[data-aci]'); if (!c) return; d.querySelectorAll('#lA i').forEach(x => x.style.outline = ''); c.style.outline = '2px solid #fff'; aci = +c.dataset.aci; d.querySelector('#lC').textContent = 'ACI ' + aci; };
-      const ok = () => {
-        const name = d.querySelector('#lN').value.trim();
-        if (!name || /[<>\/":;?*|=`]/.test(name)) { this.toast('Geçersiz katman adı (< > / \\ " : ; ? * | = ` kullanılamaz).'); return; }
-        if (S.layers.some(L => L.name.toUpperCase() === name.toUpperCase())) { this.toast('Bu adda bir katman zaten var.'); return; }
-        const cur = d.querySelector('#lCur').checked;
-        this.closeModal(); this.addLayer(name, aci, cur);
-      };
-      d.querySelector('#mOk').onclick = ok; d.querySelector('#mNo').onclick = () => this.closeModal();
-      d.querySelector('#lN').onkeydown = (e) => { if (e.key === 'Enter') ok(); };
-    });
-  }
-  addLayer(name, aci, makeCurrent) {
-    const S = this.store, i = S.layers.length;
-    S.layers.push({ name, aci, rgba: this.core.aciToRgba(aci), off: false, frozen: false, locked: false, count: 0, isNew: true });
-    S.layerVis[i] = 1; this.R.updateLayers();
-    if (makeCurrent !== false) this.curLayer = i;
-    S.dirty = true; this.renderLayers(); this.updateDoc();
-    this.toast('"' + name + '" katmanı oluşturuldu' + (makeCurrent !== false ? ' ve aktif yapıldı' : ''));
-    return i;
-  }
   bind() {
     const ov = $('ov'), R = this.R, S = this.store;
     this.initMenus();
+    $('modal').addEventListener('mousedown', (e) => { if (e.target === $('modal')) this.dismissModal(); });
     $('fileIn').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; this.load(f, null); };
     document.querySelectorAll('[data-cmd]').forEach(b => b.addEventListener('click', () => { if (!b.disabled) this.runCommand(b.dataset.cmd); }));
     document.querySelectorAll('[data-tool]').forEach(b => b.addEventListener('click', () => this.setTool(b.dataset.tool)));
@@ -1767,30 +1765,6 @@ class App {
     $('layAll').onclick = () => this.setLayerVis(() => true);
     $('layNone').onclick = () => this.setLayerVis(() => false);
     $('layInv').onclick = () => this.setLayerVis((i, v) => !v);
-    $('layers').addEventListener('click', (e) => {
-      const row = e.target.closest('.lay'); if (!row) return;
-      const i = +row.dataset.i;
-      if (e.target.closest('[data-eye]')) { S.layerVis[i] = S.layerVis[i] ? 0 : 1; this.setLayerVis((k, v) => v); return; }
-      this.setCurLayer(i); this.toast('Aktif katman: ' + S.layers[i].name);
-    });
-    $('layers').addEventListener('dblclick', (e) => {
-      const row = e.target.closest('.lay'); if (!row || e.target.closest('[data-eye]')) return;
-      const i = +row.dataset.i; this.setLayerVis(k => k === i); this.toast('Yalnızca "' + S.layers[i].name + '" gösteriliyor');
-    });
-    $('layers').addEventListener('contextmenu', (e) => {
-      const row = e.target.closest('.lay'); if (!row) return;
-      e.preventDefault(); e.stopPropagation();
-      const i = +row.dataset.i, L = S.layers[i];
-      this.contextMenu(e.clientX, e.clientY, [
-        { label: 'Bu katmandaki nesneleri seç (' + fmtN(L.count || 0) + ')', fn: () => this.selectLayer(i), disabled: !S.done },
-        { label: 'Yalnız bu katmanı göster', fn: () => { this.setLayerVis(k => k === i); } },
-        { label: S.layerVis[i] ? 'Katmanı gizle' : 'Katmanı göster', fn: () => { S.layerVis[i] = S.layerVis[i] ? 0 : 1; this.setLayerVis((k, v) => v); } },
-        { label: 'Aktif katman yap', fn: () => this.setCurLayer(i) },
-        '-',
-        { label: 'Seçili nesneleri bu katmana taşı (' + fmtN(S.selList.length) + ')', fn: () => this.editor.layer(S.selList.slice(), i), disabled: !S.selList.length }
-      ]);
-    });
-
     // sürükle-bırak
     const view = $('view');
     view.addEventListener('dragover', (e) => { e.preventDefault(); view.classList.add('dragover'); });
@@ -1893,7 +1867,7 @@ class App {
       e.stopPropagation();
     });
     window.addEventListener('keydown', (e) => {
-      if ($('modal').classList.contains('show')) { if (e.key === 'Escape') this.closeModal(); return; }
+      if ($('modal').classList.contains('show')) { if (e.key === 'Escape') this.dismissModal(); return; }
       if (this.menusOpen() && this.menuKey(e)) return;
       const tgt = e.target;
       if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'SELECT' || tgt.tagName === 'TEXTAREA')) return;
