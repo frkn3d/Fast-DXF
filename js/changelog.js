@@ -3,6 +3,12 @@
 'use strict';
 
 const CHANGELOG = [
+  { v: '0.1.8', d: '2026-10-09', t: 'Noktalardan geçen spline, çap ölçüsü ikonu', items: [
+    'Spline artık tıklanan noktalardan geçer; çizerken kırık denetim çizgileri yerine yalnız düzgün eğri görünür.',
+    'Spline nokta düzenleme kipinde tıklanan noktalarından düzenlenir; eğri yeniden noktalardan geçirilir.',
+    'Dosyadaki spline'ların düğüm (knot) değerleri ve uydurma noktaları korunur; eğriler daha yumuşak çizilir.',
+    'Çap ölçüsü ikonu çemberi baştan başa geçen çift oklu çizgiyle çizildi; yarıçap ikonundan ayrıldı.'
+  ] },
   { v: '0.1.7', d: '2026-10-09', t: 'Nokta düzenleme kipi', items: [
     'Nesne seçilince noktalar artık kendiliğinden çıkmaz; seçim gizmo ile gelir.',
     'Nokta düzenleme kipi: seçim çubuğundaki "Noktalar" düğmesi, nesneye çift tık ya da NOKTA komutu. Kipte gizmo gizlenir; uç, köşe, orta ve merkez noktaları görünür.',

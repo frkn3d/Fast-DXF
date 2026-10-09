@@ -33,6 +33,7 @@ const news = [
   { type: 'ARC', layer: '0', cx: ox + 40, cy: oy + 20, r: 5, a0: 30, a1: 200 },
   { type: 'ELLIPSE', layer: '0', cx: ox + 60, cy: oy + 20, mx: 8, my: 2, ratio: 0.4 },
   { type: 'SPLINE', layer: '0', xs: [ox, ox + 10, ox + 20, ox + 30], ys: [oy + 40, oy + 50, oy + 40, oy + 50], zs: [0, 1, 2, 3], deg: 3 },
+  Object.assign({ type: 'SPLINE', layer: '0' }, core.interpSpline([ox, ox + 20, ox + 40, ox + 60, ox + 80], [oy + 60, oy + 90, oy + 50, oy + 90, oy + 50], null)),
   { type: 'POINT', layer: '0', x: ox + 5, y: oy + 5, z: 100 },
   { type: 'TEXT', layer: '0', x: ox, y: oy - 10, h: 2.5, rot: 15, str: 'Deneme ŞĞÜİıöç' }
 ].map(def => ({ def, ed: { T: [0, -1, 1, 0, ox + oy, oy - ox, 1, 5] } }));  // yeni nesneler 90° döndürülmüş + Z 5

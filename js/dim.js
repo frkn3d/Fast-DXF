@@ -268,7 +268,8 @@ FastDXF.use({
       '<symbol id="i-dim" viewBox="0 0 24 24"><path d="M4 7v10M20 7v10M4 12h16"/><path d="M4 12l3-2v4zM20 12l-3-2v4z" fill="currentColor"/></symbol>' +
       '<symbol id="i-dimal" viewBox="0 0 24 24"><g transform="rotate(-32 12 12)"><path d="M4 8v8M20 8v8M4 12h16"/><path d="M4 12l3-2v4zM20 12l-3-2v4z" fill="currentColor"/></g></symbol>' +
       '<symbol id="i-dimang" viewBox="0 0 24 24"><path d="M4 20L20 20M4 20L15 6"/><path d="M12 20a8 8 0 00-2.6-5.9"/></symbol>' +
-      '<symbol id="i-dimrad" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 12l5.6-5.6"/></symbol>');
+      '<symbol id="i-dimrad" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><g transform="rotate(-45 12 12)"><path d="M12 12h7"/><path d="M20 12l-3-2v4z" fill="currentColor"/></g><circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none"/></symbol>' +
+      '<symbol id="i-dimdia" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><g transform="rotate(-45 12 12)"><path d="M5 12h14"/><path d="M4 12l3-2v4zM20 12l-3-2v4z" fill="currentColor"/></g></symbol>');
     const mbtn = document.getElementById('measStack');
     if (mbtn) mbtn.insertAdjacentHTML('beforebegin',
       '<div class="split dd" id="ddDim"><button class="big" data-tool="dimlinear" title="Doğrusal ölçü (DLI)"><svg class="i"><use href="#i-dim"/></svg><span>Ölçü</span></button>' +
@@ -278,12 +279,12 @@ FastDXF.use({
       '<button class="mi" data-tool="dimaligned"><svg class="i"><use href="#i-dimal"/></svg><span class="lbl">Hizalı</span><span class="sc">DAL</span></button>' +
       '<button class="mi" data-tool="dimangular"><svg class="i"><use href="#i-dimang"/></svg><span class="lbl">Açı</span><span class="sc">DAN</span></button>' +
       '<button class="mi" data-tool="dimradius"><svg class="i"><use href="#i-dimrad"/></svg><span class="lbl">Yarıçap</span><span class="sc">DRA</span></button>' +
-      '<button class="mi" data-tool="dimdiameter"><svg class="i"><use href="#i-dimrad"/></svg><span class="lbl">Çap</span><span class="sc">DDI</span></button>' +
+      '<button class="mi" data-tool="dimdiameter"><svg class="i"><use href="#i-dimdia"/></svg><span class="lbl">Çap</span><span class="sc">DDI</span></button>' +
       '<div class="mhead">Ayarlar</div><button class="mi" data-cmd="dimstyle"><svg class="i"><use href="#i-gear"/></svg><span class="lbl">Ölçü ayarları…</span><span class="sc">D</span></button>' +
       '</div></div>');
     // bölünmüş düğme son kullanılan ölçü aracını gösterir (çizim menüsü gibi)
     const DIM_UI = { dimlinear: ['dim', 'Ölçü', 'Doğrusal ölçü (DLI)'], dimaligned: ['dimal', 'Hizalı', 'Hizalı ölçü (DAL)'], dimangular: ['dimang', 'Açı', 'Açı ölçüsü (DAN)'],
-      dimradius: ['dimrad', 'Yarıçap', 'Yarıçap ölçüsü (DRA)'], dimdiameter: ['dimrad', 'Çap', 'Çap ölçüsü (DDI)'] };
+      dimradius: ['dimrad', 'Yarıçap', 'Yarıçap ölçüsü (DRA)'], dimdiameter: ['dimdia', 'Çap', 'Çap ölçüsü (DDI)'] };
     app.hooks.tool.push((name) => {
       const u = DIM_UI[name], mb = document.querySelector('#ddDim > .big'); if (!u || !mb) return;
       mb.dataset.tool = name; mb.title = u[2];

@@ -2,7 +2,7 @@
 
 Büyük DXF dosyalarını (1 GB ve üzeri) açmak, 2B/3B gezmek, düzenlemek ve farklı formatlarda kaydetmek için kurulum gerektirmeyen bir araç.
 
-Sürüm: **0.1.7**. Tüm sürüm notları uygulamada üst çubuktaki sürüm düğmesinde (Ayarlar'ın solunda) ve `js/changelog.js` dosyasında.
+Sürüm: **0.1.8**. Tüm sürüm notları uygulamada üst çubuktaki sürüm düğmesinde (Ayarlar'ın solunda) ve `js/changelog.js` dosyasında.
 
 ## Başlatma
 
@@ -153,7 +153,7 @@ Tüm düzenlemeler geri alınabilir (Ctrl+Z / Ctrl+Y).
   - Ölçekle: X, Y ve Z çarpanları (yalnız X doluysa orantılı ölçekler)
   - Ayna: dikey ya da yatay eksen
   - Kot ata: tüm Z'leri tek değere eşitler (düzleştirme)
-- **Çizim araçları:** Çizgi, polyline, spline, dikdörtgen, çokgen, daire (merkez-yarıçap ve 3 nokta), yay (3 nokta), elips, nokta, metin.
+- **Çizim araçları:** Çizgi, polyline, spline (tıklanan noktalardan geçer), dikdörtgen, çokgen, daire (merkez-yarıçap ve 3 nokta), yay (3 nokta), elips, nokta, metin.
   - **Metin (DT):** Tıklanan yerde, çizimin üzerinde bir düzenleyici açılır.
     - Yükseklik, açı ve hizalama (sol, orta, sağ, ortala, üst…) küçük çubuktan değişir.
     - Enter bitirir, Shift+Enter yeni satır açar (çok satırlı yazı MTEXT olur), Esc vazgeçer.

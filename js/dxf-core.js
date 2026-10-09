@@ -876,6 +876,53 @@ function DXFCore() {
     return true;
   }
 
+  // Kıskaçlı düzgün düğüm dizisi (denetim noktası sayısı n, derece deg)
+  function uniformKnots(n, deg) {
+    const kn = []; for (let i = 0; i <= deg; i++) kn.push(0); for (let i = 1; i < n - deg; i++) kn.push(i); for (let i = 0; i <= deg; i++) kn.push(n - deg);
+    return kn;
+  }
+  // Uydurma noktalarından geçen kübik B-spline (genel enterpolasyon: kiriş boyu parametre, ortalama düğüm).
+  // Döner: { xs, ys, zs (denetim noktaları), kn, deg } ya da null.
+  function interpSpline(px, py, pz) {
+    const X = [], Y = [], Z = [];
+    for (let i = 0; i < px.length; i++) {
+      const z = pz ? pz[i] || 0 : 0, k = X.length - 1;
+      if (k >= 0 && Math.hypot(px[i] - X[k], py[i] - Y[k], z - Z[k]) < 1e-9) continue;
+      X.push(px[i]); Y.push(py[i]); Z.push(z);
+    }
+    const n = X.length - 1; if (n < 1) return null;
+    const p = Math.min(3, n);
+    const u = [0]; let tot = 0;
+    for (let i = 1; i <= n; i++) { tot += Math.hypot(X[i] - X[i - 1], Y[i] - Y[i - 1], Z[i] - Z[i - 1]); u.push(tot); }
+    for (let i = 1; i <= n; i++) u[i] /= tot;
+    u[n] = 1;
+    const kn = []; for (let i = 0; i <= p; i++) kn.push(0);
+    for (let j = 1; j <= n - p; j++) { let s = 0; for (let i = j; i < j + p; i++) s += u[i]; kn.push(s / p); }
+    for (let i = 0; i <= p; i++) kn.push(1);
+    // N[k][i] = B_i,p(u_k) (Cox–de Boor)
+    const basis = (t) => {
+      const m = n + 1, N = new Float64Array(kn.length - 1);
+      if (t >= 1) { const r = new Float64Array(m); r[n] = 1; return r; }
+      for (let i = 0; i < N.length; i++) N[i] = (t >= kn[i] && t < kn[i + 1]) ? 1 : 0;
+      for (let d = 1; d <= p; d++) for (let i = 0; i < N.length - d; i++) {
+        const a = kn[i + d] - kn[i], b = kn[i + d + 1] - kn[i + 1];
+        N[i] = (a ? (t - kn[i]) / a * N[i] : 0) + (b ? (kn[i + d + 1] - t) / b * N[i + 1] : 0);
+      }
+      return N.slice(0, m);
+    };
+    const A = [], m = n + 1;
+    for (let k = 0; k <= n; k++) { const r = Array.from(basis(u[k])); r.push(X[k], Y[k], Z[k]); A.push(r); }
+    for (let c = 0; c < m; c++) {      // Gauss eleme (kısmi pivot)
+      let pr = c; for (let r = c + 1; r < m; r++) if (Math.abs(A[r][c]) > Math.abs(A[pr][c])) pr = r;
+      if (Math.abs(A[pr][c]) < 1e-14) return null;
+      [A[c], A[pr]] = [A[pr], A[c]];
+      for (let r = 0; r < m; r++) if (r !== c) { const f = A[r][c] / A[c][c]; if (f) for (let j = c; j < m + 3; j++) A[r][j] -= f * A[c][j]; }
+    }
+    const xs = [], ys = [], zs = [];
+    for (let i = 0; i < m; i++) { xs.push(A[i][m] / A[i][i]); ys.push(A[i][m + 1] / A[i][i]); zs.push(A[i][m + 2] / A[i][i]); }
+    return { xs, ys, zs, kn, deg: p, fit: { xs: X, ys: Y, zs: Z } };
+  }
+
   // ───────────────────────── Ayrıştırıcı durum makinesi ─────────────────────────
   const S_NONE = 0, S_HEADER = 1, S_TABLES = 2, S_BLOCKS = 3, S_ENT = 4, S_OTHER = 5;
   const DEG = Math.PI / 180;
@@ -1244,7 +1291,7 @@ function DXFCore() {
           const deg = E.get(71, 3) | 0, flags = E.get(70, 0) | 0;
           const out = [];
           const nc = Math.min(cx.length, cy.length);
-          const samples = Math.min(2000, Math.max(16, nc * 8));
+          const samples = Math.min(2000, Math.max(48, nc * 20));
           let ok = false;
           while (cz.length < nc) cz.push(0);
           if (nc >= 2) ok = evalSpline(deg, cx.slice(0, nc), cy.slice(0, nc), (w.length === nc && (flags & 4)) ? w : null, kn, samples, out, cz);
@@ -2149,15 +2196,14 @@ function DXFCore() {
       // denetim noktalı (CV) kıskaçlı düzgün B-spline
       const cnt = def.xs.length, deg = Math.max(1, Math.min(def.deg || 3, cnt - 1));
       if (modern && cnt >= 2) {
-        const knots = [];
-        for (let i = 0; i <= deg; i++) knots.push(0);
-        for (let i = 1; i < cnt - deg; i++) knots.push(i);
-        for (let i = 0; i <= deg; i++) knots.push(cnt - deg);
+        const knots = def.kn && def.kn.length === cnt + deg + 1 ? def.kn : uniformKnots(cnt, deg);
+        const F = def.fit && def.fit.xs.length >= 2 ? def.fit : null, nf = F ? F.xs.length : 0;
         head('SPLINE', 'AcDbSpline');
-        p(210, '0.0'); p(220, '0.0'); p(230, '1.0'); p(70, 8); p(71, deg); p(72, knots.length); p(73, cnt); p(74, 0);
-        p(42, '0.0000001'); p(43, '0.0000001');
+        p(210, '0.0'); p(220, '0.0'); p(230, '1.0'); p(70, 8); p(71, deg); p(72, knots.length); p(73, cnt); p(74, nf);
+        p(42, '0.0000001'); p(43, '0.0000001'); if (F) p(44, '0.0000000001');
         for (const k of knots) p(40, n(k));
         for (let i = 0; i < cnt; i++) { p(10, n(def.xs[i])); p(20, n(def.ys[i])); p(30, z(def.zs ? def.zs[i] : 0)); }
+        for (let i = 0; i < nf; i++) { p(11, n(F.xs[i])); p(21, n(F.ys[i])); p(31, z(F.zs ? F.zs[i] : 0)); }
       } else asPolyline(def.xs.map((x, i) => [x, def.ys[i], def.zs ? def.zs[i] : 0]), false);
     } else if (t === 'TEXT') {
       // ha: 0 sol, 1 orta, 2 sağ, 4 ortala (orta-orta) · va: 0 taban, 1 alt, 2 orta, 3 üst — hizalı yazıda 11 hizalama noktası
@@ -2282,9 +2328,16 @@ function DXFCore() {
       return Object.assign(def, { type: 'LWPOLYLINE', xs: xs.map(x => fx * x), ys, bs: bs.map(b => fx * b), closed: (fl & 1) !== 0, elev: fx * g(30, 0) });
     }
     if (type === 'SPLINE') {
-      const xs = [], ys = [], zs = [];
-      for (const [c, v] of main) { if (c === 10) xs.push(parseFloat(v)); else if (c === 20) ys.push(parseFloat(v)); else if (c === 30) zs.push(parseFloat(v)); }
-      return Object.assign(def, { type, xs, ys, zs, deg: g(71, 3) | 0, closed: (g(70, 0) & 1) !== 0 });
+      const xs = [], ys = [], zs = [], kn = [], fpx = [], fpy = [], fpz = [];
+      for (const [c, v] of main) {
+        const f = parseFloat(v);
+        if (c === 10) xs.push(f); else if (c === 20) ys.push(f); else if (c === 30) zs.push(f); else if (c === 40) kn.push(f);
+        else if (c === 11) fpx.push(f); else if (c === 21) fpy.push(f); else if (c === 31) fpz.push(f);
+      }
+      const deg = g(71, 3) | 0, out = Object.assign(def, { type, xs, ys, zs, deg, closed: (g(70, 0) & 1) !== 0 });
+      if (kn.length === xs.length + deg + 1) out.kn = kn;
+      if (fpx.length >= 2 && fpy.length === fpx.length) out.fit = { xs: fpx, ys: fpy, zs: fpx.map((_, i) => fpz[i] || 0) };
+      return out;
     }
     if (type === 'TEXT') {
       const ha = g(72, 0) | 0, va = g(73, 0) | 0, al = (ha || va) && main.some(q => q[0] === 11);
@@ -2462,7 +2515,7 @@ function DXFCore() {
     buildSaveParts,
     A_NORMAL, A_FG, A_BYBLOCK, A_LAYERCOL, A_HIDDEN, FG, ACI, rgba, aciToRgba, trueToRgba,
     codepageLabel, makeEncoder, decodeDxfString, cleanMText, fastFloat,
-    TextTok, BinTok, isBinaryDxf, Builder, Parser, parseStream, evalSpline, textBBox,
+    TextTok, BinTok, isBinaryDxf, Builder, Parser, parseStream, evalSpline, interpSpline, uniformKnots, textBBox,
     T, TYPE_NAMES, F_BYLAYER, F_NEW, F_POINTS, F_NOBBOX,
     fmtNum, codeStr, patchEntity, genEntity, parseDef, xformItems, xformItems3D, xfApply, xfMake, xfCompose, xfInverse, xfIdentity, xfTextAng, xfAng,
     toM, mMul, mInv, mDet, mPlanar, mTo8, sim2, arbAxis, ocsAxes

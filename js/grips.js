@@ -80,7 +80,15 @@ class Grips {
         break;
       }
       case 'SPLINE':
-        for (let i = 0; i < d.xs.length; i++) pt(d.xs[i], d.ys[i], d.zs && d.zs[i], (o, q) => { const r = cp(o); r.xs[i] = q[0]; r.ys[i] = q[1]; if (r.zs) r.zs[i] = q[2]; return r; });
+        if (d.fit && d.fit.xs.length >= 2) {   // uydurma noktaları: eğri yeniden noktalardan geçirilir
+          const F = d.fit;
+          for (let i = 0; i < F.xs.length; i++) pt(F.xs[i], F.ys[i], F.zs && F.zs[i], (o, q) => {
+            const fx = o.fit.xs.slice(), fy = o.fit.ys.slice(), fz = (o.fit.zs || fx.map(() => 0)).slice();
+            fx[i] = q[0]; fy[i] = q[1]; if (q[2] !== undefined) fz[i] = q[2];
+            const sp = app.core.interpSpline(fx, fy, fz); return sp ? Object.assign(cp(o), sp) : null;
+          });
+        } else
+          for (let i = 0; i < d.xs.length; i++) pt(d.xs[i], d.ys[i], d.zs && d.zs[i], (o, q) => { const r = cp(o); r.xs[i] = q[0]; r.ys[i] = q[1]; if (r.zs) r.zs[i] = q[2]; return r; });
         break;
       case 'POINT': case 'TEXT': case 'MTEXT': case 'INSERT':
         if (d.x !== undefined) mv(d.x, d.y, d.z);
@@ -174,8 +182,8 @@ class Grips {
       const nx = -d.my * d.ratio, ny = d.mx * d.ratio;
       for (let i = 0; i <= 72; i++) { const a = d.t0 + (d.t1 - d.t0) * i / 72, s = S(d.cx + d.mx * Math.cos(a) + nx * Math.sin(a), d.cy + d.my * Math.cos(a) + ny * Math.sin(a)); i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]); }
     } else if (d.type === 'SPLINE') {
-      const n = d.xs.length, deg = Math.min(d.deg || 3, n - 1), kn = []; for (let i = 0; i <= deg; i++) kn.push(0); for (let i = 1; i < n - deg; i++) kn.push(i); for (let i = 0; i <= deg; i++) kn.push(n - deg);
-      const out = []; if (app.core.evalSpline(deg, d.xs, d.ys, null, kn, 100, out)) for (let i = 0; i < out.length; i += 2) { const s = S(out[i], out[i + 1]); i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]); }
+      const n = d.xs.length, deg = Math.min(d.deg || 3, n - 1), kn = d.kn && d.kn.length === n + deg + 1 ? d.kn : app.core.uniformKnots(n, deg);
+      const out = []; if (app.core.evalSpline(deg, d.xs, d.ys, null, kn, Math.max(64, n * 24), out)) for (let i = 0; i < out.length; i += 2) { const s = S(out[i], out[i + 1]); i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]); }
     } else if (d.type === 'DIMENSION' && app.dims) {
       ctx.restore(); const rd = Object.assign({}, d); for (const [kx, ky] of [['x1', 'y1'], ['x2', 'y2'], ['cx', 'cy'], ['lx', 'ly']]) if (rd[kx] !== undefined) { rd[kx] -= o[0]; rd[ky] -= o[1]; }
       app.dims.draw(ctx, rd); return;

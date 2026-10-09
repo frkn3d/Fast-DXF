@@ -25,7 +25,7 @@ const TOOL_ICON = { line: 'line', pline: 'pline', spline: 'spline', rect: 'rect'
 const COMMANDS = [
   [['l', 'line', 'çizgi'], 't', 'line', 'Çizgi', 'Çiz'],
   [['pl', 'pline', 'polyline'], 't', 'pline', 'Polyline', 'Çiz'],
-  [['spl', 'spline'], 't', 'spline', 'Spline (denetim noktalı)', 'Çiz'],
+  [['spl', 'spline'], 't', 'spline', 'Spline (noktalardan geçen)', 'Çiz'],
   [['rec', 'rectang', 'dikdörtgen'], 't', 'rect', 'Dikdörtgen', 'Çiz'],
   [['pol', 'polygon', 'çokgen'], 't', 'polygon', 'Çokgen', 'Çiz'],
   [['c', 'circle', 'daire'], 't', 'circle', 'Daire (merkez, yarıçap)', 'Çiz'],
@@ -932,11 +932,11 @@ class App {
       },
       spline: {
         wantsPoints: true, pts: [],
-        prompt() { return this.pts.length ? 'Sonraki denetim noktası — Enter/sağ tık: bitir' : 'Spline: ilk denetim noktası'; },
+        prompt() { return this.pts.length ? 'Sonraki nokta (eğri noktalardan geçer) — Enter/sağ tık: bitir' : 'Spline: ilk nokta'; },
         start() { this.pts = []; },
         click(p) { this.pts.push(p); },
         finish(quiet) {
-          if (this.pts.length >= 2 && app.ready()) { const a = this.pts.map(A); app.editor.create(app.newDef('SPLINE', { xs: a.map(q => q[0]), ys: a.map(q => q[1]), zs: this.pts.map(Z), deg: 3 })); }
+          if (this.pts.length >= 2 && app.ready()) { const a = this.pts.map(A), sp = app.core.interpSpline(a.map(q => q[0]), a.map(q => q[1]), this.pts.map(Z)); if (sp) app.editor.create(app.newDef('SPLINE', sp)); }
           this.pts = [];
           if (!quiet) app.done1();
         },
@@ -945,9 +945,8 @@ class App {
         cancel() { this.finish(true); },
         preview(ctx) {
           const P = this.pts.concat(this.pts.length ? [app.point(this.pts[this.pts.length - 1])] : []); if (P.length < 2) return;
-          strokePts(ctx, P, false, 'rgba(76,154,255,.45)', [4, 4]);
-          const n = P.length, deg = Math.min(3, n - 1), kn = []; for (let i = 0; i <= deg; i++) kn.push(0); for (let i = 1; i < n - deg; i++) kn.push(i); for (let i = 0; i <= deg; i++) kn.push(n - deg);
-          const out = []; if (app.core.evalSpline(deg, P.map(q => q[0]), P.map(q => q[1]), null, kn, 100, out)) { const C = []; for (let i = 0; i < out.length; i += 2) C.push([out[i], out[i + 1]]); strokePts(ctx, C); }
+          const sp = app.core.interpSpline(P.map(q => q[0]), P.map(q => q[1]), null); if (!sp) return;
+          const out = []; if (app.core.evalSpline(sp.deg, sp.xs, sp.ys, null, sp.kn, Math.max(64, P.length * 24), out)) { const C = []; for (let i = 0; i < out.length; i += 2) C.push([out[i], out[i + 1]]); strokePts(ctx, C); }
         }
       },
       rect: {
