@@ -36,7 +36,9 @@ function saveWorkerMain() {
 }
 
 function spawnWorker(fn) {
-  const src = DXFCore.toString() + '\n;(' + fn.toString() + ')();';
+  // çekirdek eklentileri (ölçü geometrisi) işçiye de gömülür
+  const dim = typeof DXFDimCore === 'function' ? DXFDimCore.toString() + '\n' : '';
+  const src = dim + DXFCore.toString() + '\n;(' + fn.toString() + ')();';
   const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
   const w = new Worker(url);
   setTimeout(() => URL.revokeObjectURL(url), 10000);

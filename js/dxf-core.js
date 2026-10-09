@@ -8,6 +8,9 @@
  */
 function DXFCore() {
   'use strict';
+  // ölçü geometrisi (js/dim-core.js): tarayıcıda/işçide genel fonksiyon, Node'da require
+  const DIM = (typeof DXFDimCore === 'function') ? DXFDimCore()
+    : (typeof require === 'function' ? (() => { try { return require('./dim-core.js')(); } catch (e) { return null; } })() : null);
 
   // ───────────────────────── Renkler ─────────────────────────
   // Renkler Uint32 olarak paketlenir: r | g<<8 | b<<16 | a<<24 (Uint8 görünümünde r,g,b,a).
@@ -894,11 +897,30 @@ function DXFCore() {
     return arbAxis(nx, ny, nz);
   }
 
+  // DIMENSION grup kodlarından ölçü tanımı (EntAcc ya da [kod, değer] dizisi)
+  function dimDefOf(get, xd) {
+    if (!DIM) return null;
+    const kind = DIM.KIND_OF[get(70, 0) & 7]; if (!kind) return null;
+    const d = { kind, z: get(30, 0), text: '' };
+    if (kind === 'linear' || kind === 'aligned') Object.assign(d, { x1: get(13, 0), y1: get(23, 0), x2: get(14, 0), y2: get(24, 0), lx: get(10, 0), ly: get(20, 0), rot: get(50, 0) });
+    else if (kind === 'radius') Object.assign(d, { cx: get(10, 0), cy: get(20, 0), x2: get(15, 0), y2: get(25, 0) });
+    else if (kind === 'diameter') Object.assign(d, { x2: get(10, 0), y2: get(20, 0), cx: (get(10, 0) + get(15, 0)) / 2, cy: (get(20, 0) + get(25, 0)) / 2 });
+    else if (kind === 'angular') Object.assign(d, { x1: get(13, 0), y1: get(23, 0), x2: get(14, 0), y2: get(24, 0), cx: get(15, 0), cy: get(25, 0), lx: get(10, 0), ly: get(20, 0) });
+    // XDATA DSTYLE: 1070 <değişken kodu> + 1040/1070 <değer>
+    for (let i = 0; i + 1 < xd.length; i++) if (xd[i][0] === 1070) { const o = DIM.OVR.find(q => q[0] === xd[i][1]); if (o && (xd[i + 1][0] === 1040 || xd[i + 1][0] === 1070)) { d[o[1]] = xd[i + 1][1]; i++; } }
+    return d;
+  }
+  function dimDefOfE(E) {
+    const xd = []; if (E.dstyle) for (let i = 0; i < E.n; i++) if (E.codes[i] >= 1040) xd.push([E.codes[i], E.vals[i]]);
+    const d = dimDefOf((c, df) => E.get(c, df), xd); if (d && E.str1 && E.str1.trim()) d.text = E.str1;
+    return d;
+  }
+
   class EntAcc { // tek varlığın grup kodları
     constructor() { this.codes = new Int16Array(4096); this.vals = new Float64Array(4096); this.strs = []; this.reset('', 0); }
     reset(type, fs) {
       this.type = type; this.fs = fs; this.n = 0; this.layer = '0'; this.color = 256; this.tcolor = -1;
-      this.strs.length = 0; this.name = ''; this.ps = 0; this.attf = 0; this.handle = '';
+      this.strs.length = 0; this.name = ''; this.ps = 0; this.attf = 0; this.handle = ''; this.dstyle = false; this.str1 = '';
     }
     push(code, v) {
       if (this.n >= this.codes.length) {
@@ -922,6 +944,7 @@ function DXFCore() {
       this.version = ''; this.codepage = ''; this.handseed = null; this.handseedHex = ''; this.units = 0;
       this.entStart = -1; this.entEnd = -1; this.modelHandle = ''; this.firstOwner = '';
       this.curTable = ''; this.layerTableHandle = ''; this.layerEnd = -1;
+      this.brTableHandle = ''; this.brEnd = -1; this.blocksEnd = -1; this.dimMax = 0; this.dimstyles = [];
       this.eof = false;
       this.xs = []; this.ys = []; this.bs = [];
     }
@@ -933,15 +956,18 @@ function DXFCore() {
       if (!this.inObj) return;
       const E = this.E;
       if ((code >= 10 && code <= 59) || (code >= 70 && code <= 99) || (code >= 210 && code <= 239)) { E.push(code, tk.num()); return; }
+      if (code >= 1010 && code <= 1071) { E.push(code, tk.num()); return; }
       switch (code) {
         case 8: E.layer = tk.str(); break;
         case 62: E.color = tk.num() | 0; break;
         case 420: E.tcolor = tk.num() | 0; break;
-        case 1: case 3: E.strs.push(tk.str()); break;
+        case 1: { const v = tk.str(); E.strs.push(v); E.str1 = v; break; }
+        case 3: E.strs.push(tk.str()); break;
         case 2: E.name = tk.str(); break;
         case 67: E.ps = tk.num() | 0; break;
         case 66: E.attf = tk.num() | 0; break;
         case 5: if (this.sec === S_TABLES) E.handle = tk.str().trim(); break;
+        case 1000: if (tk.str().trim() === 'DSTYLE') E.dstyle = true; break;
         case 330: if (this.sec === S_ENT && !this.firstOwner) this.firstOwner = tk.str().trim(); break;
       }
     }
@@ -963,12 +989,13 @@ function DXFCore() {
       if (v === 'ENDSEC') {
         if (this.sec === S_HEADER) this.tk.setDecoder(codepageLabel(this.codepage, this.version));
         if (this.sec === S_ENT) { this.flushPending(off); if (this.entStart < 0) this.entStart = off; this.entEnd = off; }
-        if (this.sec === S_BLOCKS) { this.flushPending(off); this.B.endBlock(); this.B.blocksDone(); }
+        if (this.sec === S_BLOCKS) { this.flushPending(off); this.B.endBlock(); this.B.blocksDone(); if (this.blocksEnd < 0) this.blocksEnd = off; }
         if (this.sec === S_TABLES) this.B.postLayers();
         this.sec = S_NONE; return;
       }
       if (v === 'EOF') { this.flushPending(off); this.eof = true; this.tk.stop = true; return; }
       if (v === 'ENDTAB' && this.sec === S_TABLES && this.curTable === 'LAYER' && this.layerEnd < 0) this.layerEnd = off;
+      if (v === 'ENDTAB' && this.sec === S_TABLES && this.curTable === 'BLOCK_RECORD' && this.brEnd < 0) this.brEnd = off;
       if (this.sec === S_ENT || this.sec === S_BLOCKS || this.sec === S_TABLES) {
         if (this.sec === S_ENT && this.entStart < 0) this.entStart = off;
         this.E.reset(v, off); this.inObj = true;
@@ -978,13 +1005,15 @@ function DXFCore() {
       if (!this.inObj) return;
       const E = this.E;
       if (this.sec === S_TABLES) {
-        if (E.type === 'TABLE') { this.curTable = E.name.trim().toUpperCase(); if (this.curTable === 'LAYER') this.layerTableHandle = E.handle; }
+        if (E.type === 'TABLE') { this.curTable = E.name.trim().toUpperCase(); if (this.curTable === 'LAYER') this.layerTableHandle = E.handle; if (this.curTable === 'BLOCK_RECORD') this.brTableHandle = E.handle; }
+        else if (E.type === 'DIMSTYLE') this.dimstyles.push(E.name.trim());
         else if (E.type === 'LAYER') this.B.addLayer(E.name, E.color === 256 ? 7 : E.color, E.get(70, 0) | 0, E.tcolor, E.fs, off);
         else if (E.type === 'BLOCK_RECORD' && E.name.toUpperCase() === '*MODEL_SPACE') this.modelHandle = E.handle;
+        if (E.type === 'BLOCK_RECORD') { const m = /^\*D(\d+)$/i.exec(E.name.trim()); if (m) this.dimMax = Math.max(this.dimMax, +m[1]); }
         return;
       }
       if (this.sec === S_BLOCKS) {
-        if (E.type === 'BLOCK') { this.flushPending(E.fs); this.B.beginBlock(E.name, E.get(10, 0), E.get(20, 0), E.get(30, 0)); return; }
+        if (E.type === 'BLOCK') { const m = /^\*D(\d+)$/i.exec(E.name.trim()); if (m) this.dimMax = Math.max(this.dimMax, +m[1]); this.flushPending(E.fs); this.B.beginBlock(E.name, E.get(10, 0), E.get(20, 0), E.get(30, 0)); return; }
         if (E.type === 'ENDBLK') { this.flushPending(E.fs); this.B.endBlock(); return; }
         if (this.B.target === null || this.B.skipping) return;
         this.entity(E, off);
@@ -1250,7 +1279,15 @@ function DXFCore() {
         }
         case 'DIMENSION': case 'ARC_DIMENSION': case 'LARGE_RADIAL_DIMENSION': {
           B.begin(T.DIMENSION, E.layer, E.color, E.tcolor);
-          if (E.name) B.inst(B.blockIdx(E.name), 1, 0, 0, 1, 0, 0, 1, 0);
+          const bi = E.name ? B.blockIdx(E.name) : -1;
+          if (bi >= 0 && B.blocks[bi].defined) B.inst(bi, 1, 0, 0, 1, 0, 0, 1, 0);
+          else if (DIM) {
+            const dd = dimDefOfE(E); if (!dd) break;
+            const G = DIM.geom(dd); B.cz = dd.z || 0;
+            for (const q of G.segs) B.seg(q[0], q[1], q[2], q[3]);
+            for (const q of G.tris) { B.tri(q[0], q[1], B.cz, q[2], q[3], B.cz, q[4], q[5], B.cz); B.seg(q[0], q[1], q[2], q[3]); B.seg(q[2], q[3], q[4], q[5]); B.seg(q[4], q[5], q[0], q[1]); }
+            for (const t of G.texts) B.text(t.x, t.y, t.h, t.rot * DEG, 1 + 4 * 2, decodeDxfString(t.str), 1);
+          }
           break;
         }
         case 'SOLID': case 'TRACE': case '3DFACE': {
@@ -1426,6 +1463,7 @@ function DXFCore() {
       handseed: P.handseed, handseedHex: P.handseedHex, modelHandle: P.modelHandle || P.firstOwner,
       entStart: P.entStart < 0 ? size : P.entStart, entEnd: P.entEnd < 0 ? size : P.entEnd,
       layerEnd: P.layerEnd, layerTableHandle: P.layerTableHandle,
+      brEnd: P.brEnd, brTableHandle: P.brTableHandle, blocksEnd: P.blocksEnd, dimMax: P.dimMax, dimstyles: P.dimstyles,
       origin: [B.ox, B.oy], ext, stats: B.stats, unsupported: B.unsupported, warnings: B.warnings,
       entCount: B.entCount, textCount: B.textCount, instCount: B.instCount, ms: Date.now() - t0, eof: P.eof
     });
@@ -1581,7 +1619,7 @@ function DXFCore() {
     const W3 = {
       LINE: { P: [10, 11] }, POINT: { P: [10] }, '3DFACE': { P: [10, 11, 12, 13] }, SPLINE: { P: [10, 11], V: [12, 13], N: true },
       LEADER: { P: [10], V: [211, 212, 213], N: true }, MLINE: { P: [10, 11], V: [12, 13], N: true }, MESH: { P: [10] },
-      IMAGE: { P: [10], V: [11, 12] }, WIPEOUT: { P: [10], V: [11, 12] }, TOLERANCE: { P: [10], V: [11], N: true }, VERTEX: { P: [10] }
+      DIMENSION: { P: [10, 11, 12, 13, 14, 15, 16] }, IMAGE: { P: [10], V: [11, 12] }, WIPEOUT: { P: [10], V: [11, 12] }, TOLERANCE: { P: [10], V: [11], N: true }, VERTEX: { P: [10] }
     };
     // ELLIPSE: eşlenik yarı eksenlerden asal eksenler
     const ellipse = (sub) => {
@@ -2010,6 +2048,7 @@ function DXFCore() {
             break;
           case 'LEADER': if (c === 40 || c === 41) it.v = fmt(num() * F.sc); break;
           case 'MLINE': if (c === 40 || c === 41 || c === 42) it.v = fmt(num() * F.sc); break;
+          case 'DIMENSION': if (c === 50) it.v = fmt(xfAng(F, num())); break;
         }
       }
       // aynalamada yön değiştiren değerler
@@ -2116,10 +2155,70 @@ function DXFCore() {
         for (let i = 0; i < cnt; i++) { p(10, n(def.xs[i])); p(20, n(def.ys[i])); p(30, z(def.zs ? def.zs[i] : 0)); }
       } else asPolyline(def.xs.map((x, i) => [x, def.ys[i], def.zs ? def.zs[i] : 0]), false);
     } else if (t === 'TEXT') {
+      // ha: 0 sol, 1 orta, 2 sağ, 4 ortala (orta-orta) · va: 0 taban, 1 alt, 2 orta, 3 üst — hizalı yazıda 11 hizalama noktası
+      const ha = def.ha || 0, va = def.va || 0, aligned = ha !== 0 || va !== 0;
       head('TEXT', 'AcDbText');
       p(10, n(def.x)); p(20, n(def.y)); p(30, z(def.z)); p(40, n(def.h)); p(1, def.str);
       if (def.rot) p(50, n(def.rot));
+      if (def.wf && def.wf !== 1) p(41, n(def.wf));
+      if (def.style) p(7, def.style);
+      if (ha) p(72, ha);
+      if (aligned) { p(11, n(def.x)); p(21, n(def.y)); p(31, z(def.z)); }
       if (modern) p(100, 'AcDbText');
+      if (va) p(73, va);
+    } else if (t === 'SOLID') {
+      head('SOLID', 'AcDbTrace');
+      const zz = z(def.z), Q = def.pts;   // 3 ya da 4 köşe (AutoCAD sırası: 1, 2, 4, 3)
+      for (let i = 0; i < 4; i++) { const q = Q[Math.min(i, Q.length - 1)]; p(10 + i, n(q[0])); p(20 + i, n(q[1])); p(30 + i, zz); }
+    } else if (t === 'DIMENSION') {
+      const k = def.kind, dd = DIM.norm(def), G = DIM.geom(def), zz = z(def.z);
+      head('DIMENSION', 'AcDbDimension');
+      if (def.block) p(2, def.block);
+      const P = (c, x, y) => { p(c, n(x)); p(c + 10, n(y)); p(c + 20, zz); };
+      if (k === 'linear' || k === 'aligned') P(10, G.B[0], G.B[1]);
+      else if (k === 'radius') P(10, def.cx, def.cy);
+      else if (k === 'diameter') P(10, def.x2, def.y2);
+      else P(10, def.lx, def.ly);
+      P(11, G.tx, G.ty);
+      p(70, DIM.CODE_OF[k] | (def.block ? 32 : 0) | 128);
+      if (r2000) p(42, n(G.value));
+      if (def.text) p(1, def.text);
+      p(3, def.dimstyle || 'Standard');
+      if (k === 'linear' || k === 'aligned') {
+        if (modern) p(100, 'AcDbAlignedDimension');
+        P(13, def.x1, def.y1); P(14, def.x2, def.y2);
+        if (k === 'linear') { p(50, n(def.rot || 0)); if (modern) p(100, 'AcDbRotatedDimension'); }
+      } else if (k === 'radius' || k === 'diameter') {
+        if (modern) p(100, k === 'radius' ? 'AcDbRadialDimension' : 'AcDbDiametricDimension');
+        if (k === 'radius') P(15, def.x2, def.y2); else P(15, 2 * def.cx - def.x2, 2 * def.cy - def.y2);
+        p(40, '0.0');
+      } else {
+        if (modern) p(100, 'AcDb3PointAngularDimension');
+        P(13, def.x1, def.y1); P(14, def.x2, def.y2); P(15, def.cx, def.cy);
+      }
+      // ölçü stili geçersiz kılmaları (AutoCAD DSTYLE XDATA)
+      p(1001, 'ACAD'); p(1000, 'DSTYLE'); p(1002, '{');
+      for (const [code, key, gc] of DIM.OVR) { p(1070, code); p(gc, gc === 1070 ? Math.round(dd[key]) : n(dd[key])); }
+      p(1002, '}');
+    } else if (t === 'MTEXT') {
+      if (!modern) {
+        // R12'de MTEXT yok: her satır ayrı TEXT
+        const lines = String(def.str).split('\n'), r = (def.rot || 0) * Math.PI / 180, lh = def.h * 1.667;
+        const parts = lines.map((ln, i) => genEntity(Object.assign({}, def, { type: 'TEXT', str: ln, x: def.x + Math.sin(r) * lh * i, y: def.y - Math.cos(r) * lh * i, ha: 0, va: 0 }), ctx));
+        return parts.join('');
+      }
+      head('MTEXT', 'AcDbMText');
+      p(10, n(def.x)); p(20, n(def.y)); p(30, z(def.z)); p(40, n(def.h)); p(41, n(def.width || 0));
+      p(71, def.attach || 1); p(72, 1);
+      // metin: satır sonu \P, özel karakterler kaçışlı, 250 karakterlik parçalar (3) + son parça (1)
+      const enc = String(def.str).replace(/\\/g, '\\\\').replace(/\{/g, '\\{').replace(/\}/g, '\\}').replace(/\r?\n/g, '\\P');
+      const chunks = []; for (let i = 0; i < enc.length; i += 250) chunks.push(enc.slice(i, i + 250));
+      if (!chunks.length) chunks.push('');
+      for (let i = 0; i < chunks.length - 1; i++) p(3, chunks[i]);
+      p(1, chunks[chunks.length - 1]);
+      if (def.style) p(7, def.style);
+      const r = (def.rot || 0) * Math.PI / 180;
+      p(11, n(Math.cos(r))); p(21, n(Math.sin(r))); p(31, '0.0');
     }
     return P.join(eol) + eol;
   }
@@ -2182,9 +2281,25 @@ function DXFCore() {
       for (const [c, v] of main) { if (c === 10) xs.push(parseFloat(v)); else if (c === 20) ys.push(parseFloat(v)); else if (c === 30) zs.push(parseFloat(v)); }
       return Object.assign(def, { type, xs, ys, zs, deg: g(71, 3) | 0, closed: (g(70, 0) & 1) !== 0 });
     }
-    if (type === 'TEXT') return Object.assign(def, { type, x: fx * g(10, 0), y: g(20, 0), z: fx * g(30, 0), h: g(40, 1), rot: g(50, 0), str: gs(1) || '' });
+    if (type === 'TEXT') {
+      const ha = g(72, 0) | 0, va = g(73, 0) | 0, al = (ha || va) && main.some(q => q[0] === 11);
+      const x = al ? g(11, 0) : g(10, 0), y = al ? g(21, 0) : g(20, 0), zz = al ? g(31, 0) : g(30, 0);
+      return Object.assign(def, { type, x: fx * x, y, z: fx * zz, h: g(40, 1), rot: flip ? norm360(180 - g(50, 0)) : g(50, 0), str: decodeDxfString(gs(1) || ''), ha, va, wf: g(41, 1), style: gs(7) });
+    }
     if (type === 'INSERT') return Object.assign(def, { type, x: fx * g(10, 0), y: g(20, 0), z: fx * g(30, 0), unsupported: true });
-    if (type === 'MTEXT') return Object.assign(def, { type, x: g(10, 0), y: g(20, 0), z: g(30, 0), unsupported: true });
+    if (type === 'DIMENSION') {
+      const xd = []; let inDs = false;
+      for (const [c, v] of main) { if (c === 1000 && v.trim() === 'DSTYLE') inDs = true; else if (inDs && (c === 1070 || c === 1040)) xd.push([c, parseFloat(v)]); }
+      const dd = dimDefOf(g, xd);
+      if (!dd) return Object.assign(def, { type, unsupported: true });
+      dd.text = gs(1) || ''; dd.block = gs(2); dd.dimstyle = gs(3);
+      return Object.assign(def, dd, { type });
+    }
+    if (type === 'MTEXT') {
+      let raw = ''; for (const [c, v] of main) if (c === 3) raw += v; for (const [c, v] of main) if (c === 1) raw += v;
+      let rot = g(50, 0); if (main.some(q => q[0] === 11)) rot = Math.atan2(g(21, 0), g(11, 1)) * 180 / Math.PI;
+      return Object.assign(def, { type, x: g(10, 0), y: g(20, 0), z: g(30, 0), h: g(40, 1), width: g(41, 0), attach: g(71, 1) | 0, rot: norm360(rot), str: cleanMText(raw), style: gs(7) });
+    }
     return Object.assign(def, { type, unsupported: true });
   }
 
@@ -2223,7 +2338,50 @@ function DXFCore() {
     const appended = [];
     for (const c of msg.copies) appended.push(patchEntity(c.text, Object.assign({}, c.ed, modern ? { copy: { alloc } } : {}), eol));
     const ctx = { eol, version: msg.version || 'AC1009', owner: msg.owner || '', alloc: modern ? alloc : () => '' };
-    for (const d of msg.news) { const txt = genEntity(d.def, ctx); appended.push(d.ed ? patchEntity(txt, d.ed, eol) : txt); }
+    // Yeni ölçüler: son (dönüştürülmüş) tanımdan anonim *D bloğu üret; blok eklenemiyorsa ölçüyü çizgi/ok/yazıya patlat
+    let dimNext = (msg.dimMax || 0) + 1, blockText = '', brText = '';
+    const canBlocks = DIM && msg.blocksEnd >= 0 && (!modern || msg.brEnd >= 0);
+    const dimParts = (d, owner, inModel) => {
+      const G = DIM.geom(d), out = [], zz = d.z || 0, c2 = { eol, version: msg.version || 'AC1009', owner, alloc: ctx.alloc };
+      const base = inModel ? { layer: d.layer, aci: d.aci } : { layer: '0', aci: 0 };
+      for (const q of G.segs) out.push(genEntity(Object.assign({ type: 'LINE', x1: q[0], y1: q[1], z1: zz, x2: q[2], y2: q[3], z2: zz }, base), c2));
+      for (const q of G.tris) out.push(genEntity(Object.assign({ type: 'SOLID', z: zz, pts: [[q[0], q[1]], [q[2], q[3]], [q[4], q[5]]] }, base), c2));
+      for (const t of G.texts) out.push(genEntity(Object.assign({ type: 'TEXT', x: t.x, y: t.y, z: zz, h: t.h, rot: t.rot, str: t.str, ha: 1, va: 2 }, base), c2));
+      return out.join('');
+    };
+    const finishDim = (txt) => {
+      const d = parseDef(txt); if (!d || !d.kind) return txt;
+      if (!canBlocks) return dimParts(d, ctx.owner, true);   // blok eklenemiyor: bağımsız çizgi/ok/yazı
+      const name = '*D' + (dimNext++), bh = modern ? alloc() : '';
+      const P = [], q = (c, v) => P.push(codeStr(c), String(v));
+      q(0, 'BLOCK'); if (modern) { q(5, alloc()); q(330, bh); q(100, 'AcDbEntity'); } q(8, '0'); if (modern) q(100, 'AcDbBlockBegin');
+      q(2, name); q(70, 1); q(10, '0.0'); q(20, '0.0'); q(30, '0.0'); q(3, name); q(1, '');
+      let body = P.join(eol) + eol + dimParts(d, bh);
+      const Q = [], r = (c, v) => Q.push(codeStr(c), String(v));
+      r(0, 'ENDBLK'); if (modern) { r(5, alloc()); r(330, bh); r(100, 'AcDbEntity'); } r(8, '0'); if (modern) r(100, 'AcDbBlockEnd');
+      blockText += body + Q.join(eol) + eol;
+      if (modern) {
+        const B = [], b = (c, v) => B.push(codeStr(c), String(v));
+        b(0, 'BLOCK_RECORD'); b(5, bh); if (msg.brTableHandle) b(330, msg.brTableHandle); b(100, 'AcDbSymbolTableRecord'); b(100, 'AcDbBlockTableRecord'); b(2, name);
+        if ((msg.version || '') >= 'AC1015') b(340, '0');
+        brText += B.join(eol) + eol;
+      }
+      // ölçü varlığına blok adı (2) ve "bloğu yalnız bu ölçü kullanır" bayrağı (70 | 32)
+      const L = txt.split(/\r?\n/); if (L.length && L[L.length - 1] === '') L.pop();
+      const out = []; let added = false;
+      for (let i = 0; i + 1 < L.length; i += 2) {
+        const c = parseInt(L[i], 10); let v = L[i + 1];
+        if (c === 2) continue;
+        if (c === 70) v = String((parseInt(v, 10) | 32));
+        out.push(L[i], v);
+        if (!added && ((c === 100 && v.trim() === 'AcDbDimension') || (!modern && c === 8))) { out.push(codeStr(2), name); added = true; }
+      }
+      return out.join(eol) + eol;
+    };
+    for (const d of msg.news) {
+      let txt = genEntity(d.def, ctx); if (d.ed) txt = patchEntity(txt, d.ed, eol);
+      appended.push(d.def.type === 'DIMENSION' ? finishDim(txt) : txt);
+    }
     const appendText = appended.join('');
 
     // yeni katmanlar: LAYER tablosunun sonuna (ENDTAB'tan önce)
@@ -2258,6 +2416,8 @@ function DXFCore() {
     }
     if (modern && allocated && msg.handseed) events.push({ fs: msg.handseed[0], fe: msg.handseed[1], text: hnext.toString(16).toUpperCase() });
     if (layerText) events.push({ fs: msg.layerEnd, fe: msg.layerEnd, text: layerText });
+    if (brText) events.push({ fs: msg.brEnd, fe: msg.brEnd, text: brText });
+    if (blockText) events.push({ fs: msg.blocksEnd, fe: msg.blocksEnd, text: blockText });
     const parts = [];
     let cur = 0;
     const raw = (a, b) => {

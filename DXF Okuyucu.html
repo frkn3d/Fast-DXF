@@ -114,6 +114,15 @@
   .lay.locked .nm { color: var(--muted); }
   .lay .sw { cursor: pointer; }
   .lay .sw:hover { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .tedit { position: absolute; z-index: 30; display: flex; flex-direction: column; gap: 4px; pointer-events: auto; }
+  .tedit textarea { background: rgba(20,23,28,.55); color: #fff; border: 1px dashed var(--accent); border-radius: 3px; padding: 2px 4px; resize: none; overflow: hidden; font-family: Arial, "Segoe UI", sans-serif; outline: none; white-space: pre; }
+  .tedit .tbar { display: flex; gap: 6px; align-items: center; background: var(--panel); border: 1px solid var(--line2); border-radius: 6px; padding: 4px 6px; font-size: 12px; color: var(--muted); width: max-content; box-shadow: 0 6px 18px rgba(0,0,0,.35); }
+  .tedit .tbar label { display: flex; gap: 4px; align-items: center; }
+  .tedit .tbar input { width: 58px; padding: 2px 4px; font-size: 12px; }
+  .tedit .tbar select { font-size: 12px; padding: 2px; }
+  .tedit .tbar button { border: 1px solid var(--line2); background: transparent; color: var(--text); border-radius: 4px; cursor: pointer; padding: 1px 7px; }
+  .tedit .tbar .tOk { color: var(--ok); } .tedit .tbar .tNo { color: var(--danger); }
+  .tedit .thint { font-size: 11px; color: var(--muted); background: rgba(21,23,27,.8); padding: 1px 6px; border-radius: 4px; width: max-content; }
   .aci.std { grid-template-columns: repeat(9, 22px); margin-bottom: 8px; }
   .aci.std i { width: 22px; height: 22px; }
 
@@ -394,8 +403,10 @@
     </div>
     <div class="grp">
       <div class="body">
-        <button class="big" data-tool="measure" title="Mesafe ölç (DI) — kotlu noktalarda ΔZ ve eğim"><svg class="i"><use href="#i-dist"/></svg>Mesafe</button>
-        <button class="big" data-tool="area" title="Alan ölç (AA)"><svg class="i"><use href="#i-area"/></svg>Alan</button>
+        <div class="vstack" id="measStack">
+          <button class="sm" data-tool="measure" title="Mesafe ölç (DI) — kotlu noktalarda ΔZ ve eğim"><svg class="i"><use href="#i-dist"/></svg>Mesafe</button>
+          <button class="sm" data-tool="area" title="Alan ölç (AA)"><svg class="i"><use href="#i-area"/></svg>Alan</button>
+        </div>
       </div>
       <div class="cap">Ölçüm</div>
     </div>
@@ -406,7 +417,7 @@
             <button data-style="wire" title="Tel kafes (yalnız çizgiler)">Tel kafes</button><button data-style="hidden" title="Gizli çizgi (yüzeylerin arkası gizlenir)">Gizli</button><button data-style="shaded" title="Gölgeli (yüzeyler ışıkla doldurulur)">Gölgeli</button>
           </div>
           <div style="display:flex;gap:2px">
-            <button class="chk" id="o3ZCol" data-cmd="zcolor">Kota göre renk</button>
+            <button class="chk" id="o3ZCol" data-cmd="zcolor" title="Nesneleri kotlarına (Z) göre renklendir">Kot rengi</button>
             <button class="chk" id="o3Persp" data-cmd="persp">Perspektif</button>
             <button class="chk on" id="o3Edges" data-cmd="edges" title="Tel kafes çizgilerini (kenarları) göster / gizle — gizliyken yalnız yüzeyler görünür">Kenarlar</button>
           </div>
@@ -488,6 +499,7 @@
 <input type="file" id="fileIn" accept=".dxf,.DXF" style="display:none">
 
 <script src="js/registry.js"></script>
+<script src="js/dim-core.js"></script>
 <script src="js/dxf-core.js"></script>
 <script src="js/template.js"></script>
 <script src="js/workers.js"></script>
@@ -499,6 +511,9 @@
 <script src="js/gizmo.js"></script>
 <script src="js/export.js"></script>
 <script src="js/layers-ui.js"></script>
+<script src="js/tracking.js"></script>
+<script src="js/text-tool.js"></script>
+<script src="js/dim.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

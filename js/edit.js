@@ -137,7 +137,7 @@ class Editor {
   // kind: 'move' | 'rotate' | 'scale' | 'mirror' | 'z'
   transformable(ids, kind) {
     const E = this.S.E, TN = this.core.TYPE_NAMES;
-    const bad = new Set(ids.filter(id => NO_MOVE_TYPES.has(E.type.a[id]) || (kind === 'mirror' && TN[E.type.a[id]] === 'HATCH')));
+    const bad = new Set(ids.filter(id => (NO_MOVE_TYPES.has(E.type.a[id]) && !(E.flags.a[id] & F_NEW)) || (kind === 'mirror' && TN[E.type.a[id]] === 'HATCH')));
     if (bad.size) this.app.toast(bad.size + ' nesne bu işlemde değiştirilemez (ölçü/tablo' + (kind === 'mirror' ? ', aynalamada tarama' : '') + '); seçimden çıkarıldı.', 5000);
     return ids.filter(id => !bad.has(id));
   }

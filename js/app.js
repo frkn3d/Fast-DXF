@@ -82,8 +82,8 @@ const ALIAS = new Map(); for (const c of COMMANDS) for (const a of c[0]) ALIAS.s
 const SNAP_MODES = [['end', 'Uç nokta', '□'], ['mid', 'Orta nokta', '△'], ['cen', 'Merkez', '○'], ['quad', 'Çeyrek noktası', '◇'], ['int', 'Kesişim', '✕'],
   ['perp', 'Dik', '⊥'], ['near', 'En yakın', '⧗'], ['node', 'Düğüm (nokta nesnesi)', '⊗'], ['ins', 'Ekleme noktası (blok, yazı)', '⊡']];
 const SNAP_NAME = Object.fromEntries(SNAP_MODES.map(m => [m[0], m[1]]));
-const DEFAULT_SNAP = { end: true, mid: true, cen: true, quad: false, int: true, perp: true, near: false, node: true, ins: true };
-const DEFAULT_SETTINGS = { theme: 'dark', grid: true, aperture: 12, snapLabels: true, snap: DEFAULT_SNAP, gizmo: true, dynInput: true, wheelInvert: false, zoomSpeed: 1, textLimit: 25000, newUnits: 6, style: 'wire' };
+const DEFAULT_SNAP = { end: true, mid: true, cen: true, quad: false, int: true, perp: false, near: false, node: true, ins: true };
+const DEFAULT_SETTINGS = { theme: 'dark', grid: true, aperture: 12, snapLabels: true, snap: DEFAULT_SNAP, gizmo: true, dynInput: true, wheelInvert: false, zoomSpeed: 1, textLimit: 25000, newUnits: 6, style: 'wire', otrack: true, polar: true, polarInc: 90 };
 function loadSettings() {
   let o = {}; try { o = JSON.parse(localStorage.getItem('fastdxf.settings') || '{}') || {}; } catch (e) { o = {}; }
   const st = Object.assign({}, DEFAULT_SETTINGS, o); st.snap = Object.assign({}, DEFAULT_SNAP, o.snap || {});
@@ -94,6 +94,8 @@ function saveSettings(st) { try { localStorage.setItem('fastdxf.settings', JSON.
 class App {
   constructor() {
     this.core = DXFCore();
+    // eklenti kancaları: snap() yakalamadan sonra · point(p, base) → nokta ya da null · preview(ctx) · distance(L, base) → nokta ya da null · tool(name) araç değişince
+    this.hooks = { snap: [], point: [], preview: [], distance: [], tool: [] };
     this.store = new Store(this.core);
     try { this.R = new Renderer($('gl'), $('ov'), this.store); }
     catch (e) { document.body.innerHTML = '<div style="padding:40px;font:16px sans-serif;color:#ddd">' + esc(e.message) + '</div>'; throw e; }
@@ -293,7 +295,9 @@ class App {
     const TN = this.core.TYPE_NAMES;
     if (!S.selList.length) {
       if (!info) { P.innerHTML = '<div style="color:var(--muted)">Okunuyor…</div>'; return; }
-      const st = Object.entries(info.stats).sort((a, b) => b[1] - a[1]).map(([k, v]) => '<span class="pill sel" data-type="' + esc(k) + '" title="Bu tipteki tüm nesneleri seç">' + esc(k) + ' ' + fmtN(v) + '</span>').join('');
+      // tip sayıları: model alanındaki canlı (silinmemiş) nesnelerden
+      const live = {}; { const ty = S.E.type.a, fl = S.E.flags.a; for (let i = 0; i < S.nEnt; i++) if (!(fl[i] & F_DEL)) { const k = TN[ty[i]] || '?'; live[k] = (live[k] || 0) + 1; } }
+      const st = Object.entries(live).sort((a, b) => b[1] - a[1]).map(([k, v]) => '<span class="pill sel" data-type="' + esc(k) + '" title="Bu tipteki tüm nesneleri seç">' + esc(k) + ' ' + fmtN(v) + '</span>').join('');
       const un = Object.entries(info.unsupported).map(([k, v]) => '<span class="pill" style="color:var(--warn)">' + esc(k) + ' ' + fmtN(v) + '</span>').join('');
       const surf = S.surfaces.map((s, i) => '<div class="xr" style="grid-template-columns:1fr auto auto"><span>' + esc(s.name) + '<br><span style="color:var(--muted);font-size:11px">' + fmtN(s.n / 3) + ' üçgen</span></span>' +
         '<button class="mini" data-sv="' + i + '">' + (s.visible ? 'Gizle' : 'Göster') + '</button><button class="mini" data-sd="' + i + '">Sil</button></div>').join('');
@@ -664,8 +668,9 @@ class App {
   // İmlecin dünya noktası (yakalama + orto uygulanmış); yakalanan noktada Z de döner
   point(base) {
     let p = [this.mouse.wx, this.mouse.wy];
-    if (this.snapPt) { p = this.snapPt.p.slice(); if (this.snapPt.abs) p.abs = this.snapPt.abs; }
-    else if (this.ortho && base) { if (Math.abs(p[0] - base[0]) > Math.abs(p[1] - base[1])) p[1] = base[1]; else p[0] = base[0]; }
+    if (this.snapPt) { p = this.snapPt.p.slice(); if (this.snapPt.abs) p.abs = this.snapPt.abs; return p; }
+    for (const h of this.hooks.point) { const q = h(p, base); if (q) return q; }
+    if (this.ortho && base) { if (Math.abs(p[0] - base[0]) > Math.abs(p[1] - base[1])) p[1] = base[1]; else p[0] = base[0]; }
     return p;
   }
   updateSnap() {
@@ -674,6 +679,7 @@ class App {
     if (!this.snapOn || !t || !t.wantsPoints || !this.store.grid || !this.R.is2D) return;
     this.snapPt = this.store.snap(this.mouse.wx, this.mouse.wy, (this.settings.aperture || 12) / this.R.scale, this.snapModes, this.toolBase());
     if (this.snapPt) this.refineSnap(this.snapPt);
+    for (const h of this.hooks.snap) h();
   }
   // Ekrandaki (float32, parçalı) geometriden bulunan yakalama noktasını nesnenin DXF'teki tam tanımından yeniden hesapla.
   // Tanım ilk seferde arka planda okunur; geldiğinde nokta güncellenir (tıklamadan önce hazır olur).
@@ -742,6 +748,7 @@ class App {
     if ((m = s.match(/^@(-?[\d.]+)<(-?[\d.]+)$/)) && base) { const L = +m[1], a = +m[2] * Math.PI / 180; return [base[0] + L * Math.cos(a), base[1] + L * Math.sin(a)]; }
     if ((m = s.match(/^@(-?[\d.]+)[,;](-?[\d.]+)$/)) && base) return [base[0] + +m[1], base[1] + +m[2]];
     if ((m = s.match(/^(-?[\d.]+)[,;](-?[\d.]+)(?:[,;](-?[\d.]+))?$/))) { const p = this.rel(+m[1], +m[2]); if (m[3] !== undefined) p.push(+m[3]); return p; }
+    if ((m = s.match(/^(-?[\d.]+)$/))) { for (const h of this.hooks.distance) { const q = h(+m[1], base); if (q) return q; } }
     if ((m = s.match(/^(-?[\d.]+)$/)) && base) {
       const L = +m[1]; const [cx, cy] = this.point(base); const a = Math.atan2(cy - base[1], cx - base[0]);
       return [base[0] + L * Math.cos(a), base[1] + L * Math.sin(a)];
@@ -1000,11 +1007,6 @@ class App {
         click(p) { if (app.ready()) { const a = A(p); app.editor.create(app.newDef('POINT', { x: a[0], y: a[1], z: Z(p) })); } },
         input(s) { const p = app.parsePoint(s, null); if (!p) return false; this.click(p); return true; }
       },
-      text: {
-        wantsPoints: true,
-        prompt: () => 'Metin: yerleşim noktasını tıklayın',
-        click(p) { if (app.ready()) app.textDialog(p); }
-      },
 
       // ── değiştirme
       move: selTool('move', {
@@ -1229,6 +1231,7 @@ class App {
     if (this.tool && this.tool.cancel) this.tool.cancel();
     this.gizmo.cancel();
     this.tool = this.tools[name]; this.toolName = name;
+    for (const h of this.hooks.tool) h(name);
     if (PLAN_TOOLS.has(name) && name !== 'measure' && name !== 'area') { if (!this.store.done && this.store.file) { this.toast('Dosya okunurken düzenleme yapılamaz.'); return this.setTool('select'); } }
     if (this.tool.start && this.tool.start() === false) { this.tool = this.tools.select; this.toolName = 'select'; }
     if (this.toolName !== 'select') this.pendingTool = null;
@@ -1402,6 +1405,7 @@ class App {
   drawPreview(ctx) {
     this.drawGrid(ctx);
     if (this.tool && this.tool.preview) this.tool.preview(ctx);
+    for (const h of this.hooks.preview) h(ctx);
     if (this.snapPt) this.drawSnapMarker(ctx, this.snapPt);
     if (this.marker) {
       const m = this.marker, [x, y] = this.R.w2s(m.x, m.y, m.z);
@@ -1420,23 +1424,6 @@ class App {
     const S = this.store;
     $('infoText').textContent = S.file ? fmtN(S.nEnt) + ' nesne' + (S.selList.length ? ' · ' + fmtN(S.selList.length) + ' seçili' : '') + ' · ' : '';
     if (!this.R.anim) this.vc.draw();
-  }
-  textDialog(p) {
-    const h0 = this.textH || +(20 / this.R.scale).toPrecision(2);
-    this.modal('<h2>Metin ekle</h2><label>Metin</label><input type="text" id="tStr" value=""><label>Yükseklik (çizim birimi)</label><input type="number" id="tH" step="any" value="' + h0 + '">' +
-      '<label>Dönüş açısı (derece)</label><input type="number" id="tR" step="any" value="0"><div class="btns"><button class="btn" id="mNo">Vazgeç</button><button class="btn pri" id="mOk">Ekle</button></div>', d => {
-      const ok = () => {
-        const str = d.querySelector('#tStr').value, h = +d.querySelector('#tH').value, r = +d.querySelector('#tR').value || 0;
-        this.closeModal();
-        if (!str || !(h > 0)) return;
-        this.textH = h;
-        const a = this.absP(p);
-        this.editor.create(this.newDef('TEXT', { x: a[0], y: a[1], z: p[2] || 0, h, rot: r, str }));
-      };
-      d.querySelector('#mOk').onclick = ok; d.querySelector('#mNo').onclick = () => this.closeModal();
-      d.querySelector('#tStr').onkeydown = (e) => { if (e.key === 'Enter') ok(); };
-      setTimeout(() => { const el = d.querySelector('#tStr'); if (el) el.focus(); }, 40);
-    });
   }
 
   // ───────────── metin bul / koordinata git
@@ -1787,11 +1774,19 @@ class App {
       if (e.button === 1 && e.shiftKey) { e.preventDefault(); this.stopAnim(); this.beginOrbit(); this.orbiting = { x: e.offsetX, y: e.offsetY }; ov.style.cursor = 'move'; return; }
       if (e.button === 1 || e.button === 2 || (e.button === 0 && this.spaceDown)) { e.preventDefault(); this.stopAnim(); this.startPan(e); return; }
       if (e.button !== 0) return;
+      // çift tık: tuvalde imleç yakalandığı için tarayıcının dblclick olayına güvenilmez — kendimiz algılarız
+      const now = performance.now(), lp = this._lastDown;
+      const isDbl = !!lp && now - lp.t < 450 && Math.hypot(e.offsetX - lp.x, e.offsetY - lp.y) < 5;
+      this._lastDown = isDbl ? null : { t: now, x: e.offsetX, y: e.offsetY };
+      if (isDbl && this.tool.dbl && this.toolName === 'select') { this.tool.dbl(); this.updatePrompt(); R.request(); return; }
       // seçim tutamacı
       if (this.toolName === 'select') { const h = this.gizmo.hit(e.offsetX, e.offsetY); if (h && this.gizmo.begin(h, e)) { R.request(); return; } }
       const t = this.tool;
       if (t.down) t.down(this.point(), e);
-      else if (t.click) { const base = t.base || (t.pts && t.pts[t.pts.length - 1]) || t.c || t.a || (t.P && t.P[t.P.length - 1]); Promise.resolve(t.click(this.point(base))).then(() => { this.updatePrompt(); R.request(); }); }
+      else if (t.click) {
+        const base = t.base || (t.pts && t.pts[t.pts.length - 1]) || t.c || t.a || (t.P && t.P[t.P.length - 1]);
+        Promise.resolve(t.click(this.point(base))).then(() => { if (isDbl && t.dbl && this.tool === t) t.dbl(); this.updatePrompt(); R.request(); });
+      }
     });
     ov.addEventListener('pointermove', (e) => {
       const o = this.orbiting;
@@ -1827,7 +1822,6 @@ class App {
     });
     ov.addEventListener('dblclick', (e) => {
       if (e.button === 1) { this.fit(); return; }
-      if (this.tool.dbl) { this.tool.dbl(); this.updatePrompt(); R.request(); }
     });
     ov.addEventListener('auxclick', (e) => { if (e.button === 1 && e.detail === 2) this.fit(); });
     ov.addEventListener('wheel', (e) => {
