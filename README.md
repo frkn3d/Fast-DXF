@@ -2,7 +2,7 @@
 
 Büyük DXF dosyalarını (1 GB ve üzeri) açmak, 2B/3B gezmek, düzenlemek ve farklı formatlarda kaydetmek için kurulum gerektirmeyen bir araç.
 
-Sürüm: **0.1.8**. Tüm sürüm notları uygulamada üst çubuktaki sürüm düğmesinde (Ayarlar'ın solunda) ve `js/changelog.js` dosyasında.
+Sürüm: **0.1.9**. Tüm sürüm notları uygulamada üst çubuktaki sürüm düğmesinde (Ayarlar'ın solunda) ve `js/changelog.js` dosyasında.
 
 ## Başlatma
 

@@ -1,12 +1,18 @@
-/* Fast DXF — sürüm notları. Yeni sürümde en üste bir kayıt eklenir; numara 0.1.x biçiminde birer artar.
- * Üst çubukta Ayarlar düğmesinin solundaki sürüm düğmesi bu listeyi açar. */
+/* Fast DXF — sürüm notları. Yeni sürümde en üste bir kayıt eklenir.
+ * Numaralandırma: son hane birer artar (0.1.9 → 0.1.10 → 0.1.11 …); 0.x.30'dan sonra bir sonraki seri başlar (0.1.30 → 0.2.0).
+ * Üst çubukta Ayarlar düğmesinin solundaki sürüm düğmesi bu listeyi açar: son sürüm açık, eskiler kapalı; seriler ayrı başlıkta. */
 'use strict';
 
 const CHANGELOG = [
+  { v: '0.1.9', d: '2026-10-09', t: 'Araç çubuğu düzeni, sürüm notları', items: [
+    'Seçim çubuğunda "Noktalar" düğmesi Ölçekle\'nin sağına taşındı.',
+    'Sürüm notları penceresi kaydırılabilir; son sürüm açık, eskileri başlığa tıklayınca açılır.',
+    'Sürüm numaraları: 0.1.9\'dan sonra 0.1.10, 0.1.11 … diye gider; 0.1.30\'dan sonra 0.2.0 serisi başlar.'
+  ] },
   { v: '0.1.8', d: '2026-10-09', t: 'Noktalardan geçen spline, çap ölçüsü ikonu', items: [
     'Spline artık tıklanan noktalardan geçer; çizerken kırık denetim çizgileri yerine yalnız düzgün eğri görünür.',
     'Spline nokta düzenleme kipinde tıklanan noktalarından düzenlenir; eğri yeniden noktalardan geçirilir.',
-    'Dosyadaki spline'ların düğüm (knot) değerleri ve uydurma noktaları korunur; eğriler daha yumuşak çizilir.',
+    'Dosyadaki spline\'ların düğüm (knot) değerleri ve uydurma noktaları korunur; eğriler daha yumuşak çizilir.',
     'Çap ölçüsü ikonu çemberi baştan başa geçen çift oklu çizgiyle çizildi; yarıçap ikonundan ayrıldı.'
   ] },
   { v: '0.1.7', d: '2026-10-09', t: 'Nokta düzenleme kipi', items: [
@@ -71,9 +77,16 @@ FastDXF.use({
   name: 'surum-notlari',
   init(app) {
     const dialog = () => {
-      const html = CHANGELOG.map((r, i) => '<div class="clv' + (i === 0 ? ' cur' : '') + '"><div class="clh"><b>' + esc(r.v) + '</b><span>' + esc(r.t) + '</span><em>' + esc(r.d.split('-').reverse().join('.')) + (i === 0 ? ' · kullandığınız sürüm' : '') + '</em></div><ul>' +
-        r.items.map(t => '<li>' + esc(t) + '</li>').join('') + '</ul></div>').join('');
-      app.modal('<h2>Sürüm notları <span style="color:var(--muted);font-size:12px;font-weight:400">Fast DXF ' + esc(APP_VERSION) + '</span></h2><div class="cl">' + html + '</div>' +
+      const series = v => v.split('.').slice(0, 2).join('.');
+      let html = '', last = null;
+      CHANGELOG.forEach((r, i) => {
+        const sr = series(r.v);
+        if (sr !== last) { html += '<div class="cls">' + esc(sr) + ' serisi</div>'; last = sr; }
+        html += '<details class="clv' + (i === 0 ? ' cur' : '') + '"' + (i === 0 ? ' open' : '') + '><summary><div class="clh"><b>' + esc(r.v) + '</b><span>' + esc(r.t) + '</span><em>' +
+          esc(r.d.split('-').reverse().join('.')) + (i === 0 ? ' · kullandığınız sürüm' : '') + '</em></div></summary><ul>' +
+          r.items.map(t => '<li>' + esc(t) + '</li>').join('') + '</ul></details>';
+      });
+      app.modal('<h2>Sürüm notları <span style="color:var(--muted);font-size:12px;font-weight:400">Fast DXF ' + esc(APP_VERSION) + ' · başlığa tıklayın: ayrıntı</span></h2><div class="cl">' + html + '</div>' +
         '<div class="btns"><button class="btn pri" id="mOk">Kapat</button></div>', d => d.querySelector('#mOk').onclick = () => app.closeModal());
     };
     app.addCommand(['surum', 'sürüm', 'changelog', 'version', 'ver'], 'changelog', 'Sürüm notları', 'Araçlar', dialog);
