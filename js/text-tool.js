@@ -1,4 +1,4 @@
-/* Fast DXF — metin aracı (AutoCAD TEXT / MTEXT gibi, yerinde düzenleyici)
+/* Fast DXF — metin aracı (TEXT / MTEXT, yerinde düzenleyici)
  *  · Tıklanan noktada çizim üzerinde düzenleyici açılır; yükseklik, açı ve hizalama küçük çubuktan değişir.
  *  · Enter: bitir (tek satır → TEXT) · Shift+Enter: yeni satır (çok satır → MTEXT) · Esc: vazgeç.
  *  · Düzenleyici açıkken çizimde başka yere tıklamak yazıyı kaydeder ve oraya yeni yazı başlatır.
@@ -107,12 +107,27 @@ class TextTool {
   async editAt(x, y) {
     const app = this.app, S = app.store; if (!S.grid || !app.R.is2D) return false;
     const id = S.pick(x, y, 6 / app.R.scale); if (id < 0) return false;
-    const t = app.core.TYPE_NAMES[S.E.type.a[id]]; if (t !== 'TEXT' && t !== 'MTEXT') return false;
+    return this.editId(id);
+  }
+  isText(id) { const t = this.app.core.TYPE_NAMES[this.app.store.E.type.a[id]]; return t === 'TEXT' || t === 'MTEXT'; }
+  // var olan yazıyı yerinde düzenleyicide aç
+  async editId(id) {
+    const app = this.app; if (!this.isText(id)) return false;
+    if (!app.R.is2D) { app.toast('Yazıyı yerinde düzenlemek için plan görünüme geçin; içeriği sağdaki Özellikler panelinden de değiştirebilirsiniz.', 4500); return false; }
     const d = await app.getDef(id); if (!d || d.str === undefined) return false;
     const r = app.rel(d.x, d.y);
     app.setTool('text');
     this.open([r[0], r[1], d.z || 0], { id, def: d });
     return true;
+  }
+  // Özellikler panelinden: içerik, yükseklik, açı değiştir (yeniden oluşturma; geri alınabilir)
+  async applyProps(id, str, h, rot) {
+    const app = this.app, d = await app.getDef(id); if (!d || d.str === undefined) return;
+    str = str.replace(/\s+$/, ''); if (!str.trim()) { app.toast('Metin boş olamaz (silmek için Sil).'); return; }
+    const nd = JSON.parse(JSON.stringify(d)); nd.str = str; if (h > 0) nd.h = h; if (isFinite(rot)) nd.rot = rot;
+    if (nd.type === 'TEXT' && str.indexOf('\n') >= 0) { nd.type = 'MTEXT'; const J = TEXT_JUST.find(j => j[2] === (d.ha || 0) && j[3] === (d.va || 0)); nd.attach = J ? J[4] : 1; }
+    const ids = app.editor.replace([id], [nd], 'Metin düzenlendi');
+    if (ids.length) { app.store.setSel(ids, 'set'); app.selChanged(); }
   }
 }
 
@@ -134,6 +149,26 @@ FastDXF.use({
     // görünüm değişince düzenleyici yerini korusun
     const prevDraw = app.R.onDraw;
     app.R.onDraw = () => { if (prevDraw) prevDraw(); if (T.box) T.layout(); };
-    app.addCommand(['ed', 'ddedit', 'textedit', 'metindüzenle'], 'textedit', 'Metni düzenle (yazıya çift tık)', 'Değiştir', () => app.toast('Seç aracında yazının üzerine çift tıklayın.'));
+    app.addCommand(['ed', 'ddedit', 'textedit', 'metindüzenle'], 'textedit', 'Metni düzenle (yazıya çift tık)', 'Değiştir', () => {
+      const S = app.store, id = S.selList.length === 1 ? S.selList[0] : -1;
+      if (id >= 0 && T.isText(id)) T.editId(id); else app.toast('Bir yazı seçip ED yazın ya da yazının üzerine çift tıklayın.');
+    });
+    // Özellikler paneli: tek yazı seçiliyken içerik / yükseklik / açı düzenleme kartı
+    app.hooks.props.push((P, ids) => {
+      const S = app.store; if (ids.length !== 1 || !T.isText(ids[0])) return;
+      const id = ids[0], E = S.E, t = E.ts.a[id]; if (!E.tc.a[id]) return;
+      const X = S.TX, str = S.TS[t], h = X.h.a[t], rot = X.r.a[t] * 180 / Math.PI;
+      const card = document.createElement('div'); card.className = 'card';
+      card.innerHTML = '<div class="ch">Metin<span style="text-transform:none;letter-spacing:0;font-weight:400">Shift+Enter: yeni satır</span></div><div class="cb">' +
+        '<textarea id="ptStr" rows="' + Math.min(6, Math.max(2, str.split('\n').length)) + '" style="width:100%;resize:vertical;font:13px Arial,sans-serif;background:var(--bg);color:var(--text);border:1px solid var(--line2);border-radius:6px;padding:4px 6px">' + esc(str) + '</textarea>' +
+        '<div class="xr"><span class="k">Yükseklik</span><div class="inp"><input id="ptH" value="' + (+h.toPrecision(6)) + '"></div><span></span></div>' +
+        '<div class="xr"><span class="k">Açı °</span><div class="inp"><input id="ptR" value="' + (+rot.toFixed(4)) + '"></div><span></span></div>' +
+        '<div class="actions"><button class="mini" id="ptOk">Uygula</button><button class="mini" id="ptEd">Yerinde düzenle</button></div></div>';
+      const tbl = P.querySelector('table'); if (tbl && tbl.nextSibling) P.insertBefore(card, tbl.nextSibling); else P.appendChild(card);
+      const ok = () => T.applyProps(id, card.querySelector('#ptStr').value, num(card.querySelector('#ptH').value), num(card.querySelector('#ptR').value));
+      card.querySelector('#ptOk').onclick = ok; card.querySelector('#ptEd').onclick = () => T.editId(id);
+      card.querySelector('#ptStr').onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ok(); } };
+      for (const k of ['#ptH', '#ptR']) card.querySelector(k).onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter') ok(); };
+    });
   }
 });

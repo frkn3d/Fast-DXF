@@ -2,14 +2,14 @@
 
 Büyük DXF dosyalarını (1 GB ve üzeri) açmak, 2B/3B gezmek, düzenlemek ve farklı formatlarda kaydetmek için kurulum gerektirmeyen bir araç.
 
-Sürüm: **0.1.5**. Tüm sürüm notları uygulamada üst çubuktaki sürüm düğmesinde (Ayarlar'ın solunda) ve `js/changelog.js` dosyasında.
+Sürüm: **0.1.6**. Tüm sürüm notları uygulamada üst çubuktaki sürüm düğmesinde (Ayarlar'ın solunda) ve `js/changelog.js` dosyasında.
 
 ## Başlatma
 
 `DXF Okuyucu.html` dosyasına çift tıklayın. **Chrome veya Edge** önerilir.
 
 - DXF'i pencereye sürükleyin ya da **Dosya → Aç** (Ctrl+O).
-- Dosya olmadan çizmeye başlamak için **Dosya → Yeni çizim** (Ctrl+N). Boş bir AutoCAD 2013 DXF'i açılır; birim Ayarlar'dan seçilir.
+- Uygulama açılınca doğrudan boş bir çizim gelir (varsayılan birim santimetre; Ayarlar'dan mm, cm, m, km, inç, fit). Tek görünen katman **Genel**'dir; DXF'in zorunlu "0" ve "Defpoints" katmanları dosyada kalır, boşken listede gizlenir. Yeniden başlamak için **Dosya → Yeni çizim** (Ctrl+N).
 - İnternet gerekmez; dosyanız bilgisayarınızdan çıkmaz.
 - Orijinal dosya hiçbir zaman değiştirilmez; kaydederken yeni bir dosya yazılır.
 
@@ -29,14 +29,14 @@ Sürüm: **0.1.5**. Tüm sürüm notları uygulamada üst çubuktaki sürüm dü
   - Kesişim, Dik, En yakın
   - Düğüm (nokta nesnesi), Ekleme noktası (blok, yazı)
 - Menüde yakalama hassasiyeti de piksel olarak ayarlanır.
-- Yakalanan noktada AutoCAD'deki gibi şekilli bir işaret ve tür etiketi ("Merkez" gibi) çıkar.
+- Yakalanan noktada şekilli bir işaret ve tür etiketi ("Merkez" gibi) çıkar.
 - Daire ve yaylarda ekrandaki çokgenin köşeleri değil gerçek merkez ve çeyrek noktaları yakalanır.
-- **Merkez (AutoCAD gibi):** Dairenin, yayın ya da elipsin merkezi, imleç eğrinin üzerinde yaklaşık 0,4 saniye bekleyince yakalanabilir olur (merkezde soluk yeşil +). Böylece dairenin içinde çizerken imleç merkeze çekilmez.
+- **Merkez:** Dairenin, yayın ya da elipsin merkezi, imleç eğrinin üzerinde yaklaşık 0,4 saniye bekleyince yakalanabilir olur (merkezde soluk yeşil +). Böylece dairenin içinde çizerken imleç merkeze çekilmez.
 - Çizilmekte olan nesnenin önceki noktaları (ör. polyline'ın ilk noktası) da yakalanır.
 - **3B görünümde** de çalışır: noktalar ekrandan bulunur ve gerçek 3B koordinatıyla alınır.
 - **Kesinlik:** Yakalanan nokta nesnenin dosyadaki tam tanımından yeniden hesaplanır. Kesişimlerde iki nesnenin tam geometrisi kullanılır. Yani çizilen nesne kaynak koordinatı birebir alır; ekran hassasiyetinden kaynaklanan kayma olmaz.
 
-### Hizalama: kutupsal izleme ve nesne yakalama izi (AutoCAD POLAR / OTRACK)
+### Hizalama: kutupsal izleme ve nesne yakalama izi
 - **KUTUPSAL (F10):** Son noktadan açı adımlarında yeşil noktalı ışın çıkar ve imleç ışına oturur. Böylece çizgiler tam yatay, dik ya da açılı çıkar.
   - Varsayılan adım 90°'dir; düğmeye sağ tıklayıp 45°, 30°, 15° gibi bir adım seçebilirsiniz.
 - **İZ:** Bir yakalama noktasının üzerinde imleci yarım saniye bekletin; nokta "alınır" (yeşil +).
@@ -45,8 +45,8 @@ Sürüm: **0.1.5**. Tüm sürüm notları uygulamada üst çubuktaki sürüm dü
 - Hiza etkinken sayı yazmak, noktayı o yönde o uzaklığa koyar (doğrudan uzaklık girişi).
 - Çizilmekte olan nesnenin önceki noktaları kendiliğinden hizalanır (ör. dördüncü köşeyi ilk köşenin hizasına koymak için beklemeye gerek yok).
 
-### Dinamik giriş: uzunluk ve açı (AutoCAD DYNMODE)
-- Çizerken imlecin yanında iki alan görünür: önceki nokta varken **uzunluk** ve **açı** (X ekseninden saat yönü tersine), ilk noktada **X** ve **Y**.
+### Dinamik giriş: uzunluk ve açı
+- Çizerken imlecin yanında iki alan görünür: önceki nokta varken **uzunluk** ve **açı** (X ekseninden saat yönü tersine), ilk noktada **X** ve **Y**. Etkin alan mavi çerçeveli ve etiketlidir; altındaki ipucu yazılanın hangi alana gittiğini ve Tab'ın nereye geçireceğini söyler. Hiza etiketi imlecin üstünde, alanlar altında durur.
 - Sayı yazmak etkin alana girer. **Tab** yazılan değeri kilitler (sarı, asma kilitli) ve diğer alana geçer. Kilitli uzunluk ya da açı imleci kısıtlar; diğer değer fareden gelir.
 - **Enter / boşluk** noktayı koyar. **Geri tuşu** karakter siler, boş alanda kilidi açar. **Esc** alanları temizler.
 - Yalnız sayı yazıp Enter'a basmak aracın kendi anlamını korur: dairede yarıçap, döndürmede açı, ölçeklemede çarpan.
@@ -66,7 +66,7 @@ Sürüm: **0.1.5**. Tüm sürüm notları uygulamada üst çubuktaki sürüm dü
 
 Ayarlar tarayıcıda saklanır.
 
-### Komut satırı (AutoCAD gibi)
+### Komut satırı
 - Çizim alanındayken harf yazmaya başlamanız yeterli; yazdıklarınız komut satırına gider.
 - Yazarken öneri listesi açılır. ↑↓ ile seçin, Tab ile tamamlayın, Enter veya boşlukla çalıştırın.
 - Boş satırda Enter, boşluk ya da sağ tık son komutu tekrarlar.
@@ -95,7 +95,7 @@ Tam liste programda **F1** ile açılır.
   - Orta tuşa çift tıklamak çizime sığdırır.
 - **3B gezinme:**
   - **Shift + orta tuş:** her araçta yörünge.
-  - **ViewCube:** Yüz, kenar veya köşeye tıklayınca o yönden bakar (26 yön). Küp sürüklenerek döndürülür; ⌂ ev görünümüne gider.
+  - **Görünüm küpü:** Yüz, kenar veya köşeye tıklayınca o yönden bakar (26 yön). Küp sürüklenerek döndürülür; ⌂ ev görünümüne gider.
   - Perspektif izdüşüm ve düşey abartma (1–10×) seçilebilir.
 - **Görsel stiller:**
   - **Tel kafes:** Yalnız çizgiler.
@@ -128,7 +128,7 @@ Tüm düzenlemeler geri alınabilir (Ctrl+Z / Ctrl+Y).
   - Soldan sağa pencere: yalnız tamamen içindekiler. Sağdan sola pencere: kesişenler.
   - Shift ile seçime ekleyip çıkarabilirsiniz.
   - Katmana ya da nesne tipine göre hızlı seçim yapılabilir.
-- **Seçim tutamacı (gizmo, 3ds Max tarzı):** Seçimin ortasında görünür. Üstteki küçük çubuktan kip seçilir:
+- **Seçim tutamacı (gizmo):** Seçimin ortasında görünür. Üstteki küçük çubuktan kip seçilir:
   - **Taşı:**
     - Kırmızı, yeşil ve mavi oklar X, Y ve Z ekseninde taşır.
     - Eksenler arasındaki kareler XY, YZ ve XZ düzleminde taşır.
@@ -157,15 +157,15 @@ Tüm düzenlemeler geri alınabilir (Ctrl+Z / Ctrl+Y).
     - Yükseklik, açı ve hizalama (sol, orta, sağ, ortala, üst…) küçük çubuktan değişir.
     - Enter bitirir, Shift+Enter yeni satır açar (çok satırlı yazı MTEXT olur), Esc vazgeçer.
     - Başka bir noktaya tıklamak yazıyı kaydeder ve oraya yenisini başlatır.
-    - Var olan bir yazıya **çift tıklayınca** yazı yerinde düzenlenir.
+    - Yazılar sonradan düzenlenir: yazıya **çift tıklayın**, ya da seçip `ED` yazın, ya da sağdaki Özellikler panelinin **Metin** kartında içerik, yükseklik ve açıyı değiştirip Uygula'ya basın.
   - **Ölçülendirme:**
     - Doğrusal ölçü: İmlecin konumuna göre yatay ya da dikey olur; `Y`/`D` ile kilitlenir. İlk soruda Enter'a basılırsa nesne seçilir.
     - Hizalı, açı (iki çizgi ya da Enter ile 3 nokta), yarıçap ve çap ölçüleri de var.
-    - Ölçüler AutoCAD'de düzenlenebilen gerçek DIMENSION nesneleri olarak kaydedilir.
-    - **Ölçü ayarları** (`D`): yazı yüksekliği, ondalık basamak ve ayırıcı; uç tipi (dolu ok ya da inşaat projelerindeki **eğik çizgi**); ölçü çizgisi, uzatma çizgisi ve yazı renkleri ayrı ayrı. Pencerede canlı önizleme var; "tüm ölçülere uygula" ile programda çizilmiş ölçüler de güncellenir.
-    - Bu değerler her ölçüye AutoCAD stil geçersiz kılması (DIMCLRD, DIMCLRE, DIMCLRT, DIMTSZ…) olarak yazılır.
+    - Ölçüler CAD programlarında düzenlenebilen gerçek DIMENSION nesneleri olarak kaydedilir.
+    - **Ölçü ayarları** (`D`): yazı yüksekliği, ondalık basamak ve ayırıcı, **birim** (ölçü metninde "12,50 cm" gibi; kapatılabilir); uç tipi (dolu ok ya da inşaat projelerindeki **eğik çizgi**) ve **ofsetler** (ok / eğik çizgi boyu, uzatma çizgisi ofseti ve taşması, yazı ofseti, ölçü çizgisi taşması); ölçü çizgisi, uzatma çizgisi ve yazı renkleri. Pencerede canlı önizleme var; "tüm ölçülere uygula" ile programda çizilmiş ölçüler de güncellenir.
+    - Bu değerler her ölçüye ölçü stili geçersiz kılması (DIMCLRD, DIMCLRE, DIMCLRT, DIMTSZ…) olarak yazılır.
     - Şeritteki Ölçü düğmesi son kullanılan ölçü aracını hatırlar.
-  - AutoCAD'deki gibi çizgi aracı Enter'a kadar sürer; diğerleri tek nesneden sonra biter.
+  - Çizgi aracı Enter'a kadar sürer; diğerleri tek nesneden sonra biter.
   - Kotlu bir noktaya yakalanırsanız yeni nesne o kotta oluşur.
 - **Değiştirme araçları:**
   - **Taşı / Kopyala:** Taban noktası ve hedef nokta seçilir. İki nokta da kotluysa Z farkı da uygulanır.
@@ -223,12 +223,12 @@ Bu bilgisayarda ölçülen süreler:
   - Değiştirilen nesneler yeniden yazılır: katman, renk, çizgi tipi, kalınlık ve çizgi ağırlığı korunur, nesne tutamacı (handle) yenilenir.
 - **Taşınamayan nesneler:** Dosyadan gelen ölçü (DIMENSION) ve tablo nesneleri taşınamaz ve dönüştürülemez; programda çizilen ölçüler dönüştürülebilir. Taramalar düzlemde aynalanamaz (taşıma, döndürme ve ölçekleme çalışır).
 - **3B dönüşüm yaklaşıkları:**
-  - Eşit olmayan ölçekte yazılar ve döndürülmüş bloklar yaklaşık temsil edilir, çünkü DXF ve AutoCAD bu nesnelerde kesme ve çarpıtmayı saklayamaz.
+  - Eşit olmayan ölçekte yazılar ve döndürülmüş bloklar yaklaşık temsil edilir, çünkü DXF bu nesnelerde kesme ve çarpıtmayı saklayamaz.
   - Ekrandaki yazılar her zaman yatay düzlemde gösterilir.
 - **Katmanlar:**
   - Göster/gizle durumu dosyaya yazılmaz; yalnız görünümü etkiler.
   - Yeniden adlandırılan katman blok tanımlarında da kullanılıyorsa, blok içindeki nesneler eski adla kalır. Program bu durumda uyarır.
-- **Aynalanan yazılar:** AutoCAD'in varsayılanı (MIRRTEXT=0) gibi okunur kalır. Blok içindeki yazıların ekrandaki görünümü bu durumda farklı olabilir.
+- **Aynalanan yazılar:** Varsayılan ayardaki (MIRRTEXT=0) gibi okunur kalır. Blok içindeki yazıların ekrandaki görünümü bu durumda farklı olabilir.
 - **İkili (binary) DXF:** Düzenlemeler kaydedilemez; yalnız seçimi ayrı dosyaya kaydetme çalışır.
 - **Yeni katmanlar:** Kaydederken dosyanın katman tablosuna geçerli LAYER kaydı olarak eklenir. Var olan katmanlardaki renk, ad, kilit ve silme değişiklikleri kendi kayıtlarında yerinde güncellenir.
 - **Aynı dosyaya kaydetme:** Açık olan dosyanın üzerine kaydedilemez, çünkü kaydederken o dosyadan okunur.

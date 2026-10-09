@@ -13,10 +13,15 @@ const LAYER_BAD_CHARS = /[<>\/\\":;?*|=`]/;
 
 class LayerPanel {
   constructor(app) { this.app = app; this.S = app.store; }
+  // DXF'in zorunlu sistem katmanları ("0", "Defpoints") boşsa ve aktif değilse listede gösterilmez
+  sysHidden(i) {
+    const L = this.S.layers[i]; if (!L || i === this.app.curLayer || (L.count || 0) > 0) return false;
+    const n = L.name.toLowerCase(); return n === '0' || n === 'defpoints';
+  }
   // görünen (silinmemiş) katmanlar, ada göre
   visibleIdx(q) {
     const S = this.S;
-    const idx = S.layers.map((L, i) => i).filter(i => S.layers[i] && !S.layers[i].deleted && (!q || S.layers[i].name.toLocaleLowerCase('tr').includes(q)));
+    const idx = S.layers.map((L, i) => i).filter(i => S.layers[i] && !S.layers[i].deleted && !this.sysHidden(i) && (!q || S.layers[i].name.toLocaleLowerCase('tr').includes(q)));
     return idx.sort((a, b) => S.layers[a].name.localeCompare(S.layers[b].name, 'tr', { numeric: true }));
   }
   render() {
@@ -31,7 +36,7 @@ class LayerPanel {
         '<span class="nm">' + esc(L.name) + '</span><span class="ct">' + fmtN(L.count || 0) + '</span></div>');
     }
     $('layers').innerHTML = parts.join('');
-    const n = S.layers.filter(L => L && !L.deleted).length;
+    const n = S.layers.filter((L, i) => L && !L.deleted && !this.sysHidden(i)).length;
     $('layCount').textContent = n ? '(' + n + ')' : '';
     // aktif katman seçici
     const sel = $('curLayer'), sorted = this.visibleIdx('').map(i => [S.layers[i].name, i]);
@@ -51,7 +56,7 @@ class LayerPanel {
     const app = this.app, L = this.S.layers[i];
     const std = [1, 2, 3, 4, 5, 6, 7, 8, 9].map(a => '<i data-aci="' + a + '" title="ACI ' + a + '" style="background:' + app.R.colorCss(app.core.ACI[a]) + '"></i>').join('');
     app.modal('<h2>"' + esc(L.name) + '" katman rengi</h2><div style="color:var(--muted);font-size:12px;margin-bottom:6px">Şu an: ACI ' + L.aci + ' · ByLayer (katmana göre) renkli tüm nesneler birlikte değişir.</div>' +
-      '<label>Standart renkler</label><div class="aci std">' + std + '</div><label>AutoCAD renk dizini (ACI)</label><div class="aci" id="lcA">' + this.aciGrid(L.aci) + '</div>' +
+      '<label>Standart renkler</label><div class="aci std">' + std + '</div><label>Renk dizini (ACI)</label><div class="aci" id="lcA">' + this.aciGrid(L.aci) + '</div>' +
       '<div class="btns"><button class="btn" id="mNo">Vazgeç</button></div>', d => {
       d.querySelectorAll('[data-aci]').forEach(el => el.onclick = () => {
         const aci = +el.dataset.aci; app.closeModal();

@@ -1,5 +1,5 @@
-/* Fast DXF — dinamik giriş (AutoCAD DYNMODE): imlecin yanında değer alanları
- *  · Önceki nokta varken: [uzunluk] [açı°] — açı X ekseninden saat yönü tersine (mutlak), AutoCAD gibi
+/* Fast DXF — dinamik giriş: imlecin yanında değer alanları
+ *  · Önceki nokta varken: [uzunluk] [açı°] — açı X ekseninden saat yönü tersine (mutlak)
  *  · İlk noktada (çizim / taşıma araçları): [X] [Y] mutlak koordinat
  *  · Sayı yazmak etkin alana girer; Tab: yazılan değeri kilitler ve diğer alana geçer (kilitli alan imleci kısıtlar)
  *  · Enter / boşluk: noktayı koyar · Geri tuşu: karakter sil, boş alanda kilidi aç · Esc: alanları temizle
@@ -87,33 +87,45 @@ class DynInput {
     this.reset();
     if (p) app.commitPoint(p);
   }
+  // Alanlar imlecin sağ altında, yakalama etiketinin altında; hiza etiketi imlecin üstünde kalır (üst üste binmesin)
   draw(ctx) {
     const m = this.mode(); if (!m || !this.app.mouseIn) return;
     const app = this.app, sx = app.mouse.sx, sy = app.mouse.sy, cur = this.live();
     const dec = (v, k) => { if (!isFinite(v)) return '—'; return (m === 'polar' && k === 1) ? (+v.toFixed(2)).toLocaleString('tr-TR') + '°' : fmtC(+v.toFixed(4)); };
-    const lab = m === 'xy' ? ['X', 'Y'] : ['', ''];
-    ctx.save(); ctx.font = '12px "Segoe UI", sans-serif'; ctx.textBaseline = 'middle';
-    let x = sx + 18, y = sy + 22;
-    if (x + 210 > this.R.W) x = sx - 228; if (y + 24 > this.R.H) y = sy - 40;
+    const lab = m === 'xy' ? ['X', 'Y'] : ['Uzunluk', 'Açı'], dat = m === 'xy' ? ['X alanına', 'Y alanına'] : ['uzunluğa', 'açıya'];
+    const blink = (performance.now() / 530 | 0) % 2 === 0;
+    ctx.save(); ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+    let x0 = sx + 16, y = sy + 34;
+    if (x0 + 280 > this.R.W) x0 = sx - 296; if (y + 44 > this.R.H) y = sy - 66;
+    let x = x0;
     for (let k = 0; k < 2; k++) {
-      const typed = this.f[k], locked = this.lock[k] !== null, act = this.i === k && (typed || this.dirty());
-      const txt = (lab[k] ? lab[k] + ' ' : '') + (typed ? typed + (m === 'polar' && k === 1 ? '°' : '') : dec(locked ? this.lock[k] : cur[k], k));
-      const w = Math.max(64, ctx.measureText(txt).width + (locked ? 26 : 14));
-      ctx.fillStyle = typed || locked ? 'rgba(14,16,20,.96)' : 'rgba(21,23,27,.82)';
-      ctx.fillRect(x, y, w, 20);
-      ctx.strokeStyle = act ? '#4c9aff' : locked ? '#d29922' : 'rgba(255,255,255,.22)'; ctx.lineWidth = act ? 1.5 : 1;
-      ctx.strokeRect(x + .5, y + .5, w - 1, 19);
-      ctx.fillStyle = typed ? '#ffffff' : locked ? '#ffd166' : '#aeb6c2'; ctx.textAlign = 'left';
-      ctx.fillText(txt, x + 7, y + 10.5);
-      if (typed && act && (performance.now() / 530 | 0) % 2 === 0) { const cx = x + 7 + ctx.measureText(txt.replace(/°$/, '')).width + 1; ctx.fillRect(cx, y + 4, 1, 12); }
+      const typed = this.f[k], locked = this.lock[k] !== null, act = this.i === k;
+      const val = typed ? typed + (m === 'polar' && k === 1 ? '°' : '') : dec(locked ? this.lock[k] : cur[k], k);
+      ctx.font = '600 10px "Segoe UI", sans-serif'; const lw = ctx.measureText(lab[k]).width;
+      ctx.font = '12px "Segoe UI", sans-serif'; const vw = ctx.measureText(val).width;
+      const w = Math.max(84, lw + vw + (locked ? 36 : 24));
+      ctx.fillStyle = act ? 'rgba(13,22,38,.97)' : 'rgba(21,23,27,.86)'; ctx.fillRect(x, y, w, 22);
+      ctx.strokeStyle = act ? '#4c9aff' : locked ? '#d29922' : 'rgba(255,255,255,.22)'; ctx.lineWidth = act ? 2 : 1;
+      ctx.strokeRect(x + (act ? 1 : .5), y + (act ? 1 : .5), w - (act ? 2 : 1), act ? 20 : 21);
+      ctx.font = '600 10px "Segoe UI", sans-serif'; ctx.fillStyle = act ? '#8ab8ff' : '#7d8590'; ctx.fillText(lab[k], x + 7, y + 11.5);
+      const vx = x + 14 + lw;
+      ctx.font = '12px "Segoe UI", sans-serif'; ctx.fillStyle = typed ? '#ffffff' : locked ? '#ffd166' : act ? '#e6edf3' : '#aeb6c2'; ctx.fillText(val, vx, y + 11.5);
+      // etkin alanda yanıp sönen imleç: yazı varsa sonunda, yoksa değerin önünde
+      if (act && blink) { ctx.fillStyle = '#4c9aff'; ctx.fillRect(typed ? vx + ctx.measureText(val.replace(/°$/, '')).width + 1 : vx - 4, y + 5, 1.5, 12); }
       if (locked) {   // asma kilit
-        const lx = x + w - 15, ly = y + 6; ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 1.2;
+        const lx = x + w - 15, ly = y + 7; ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 1.2;
         ctx.beginPath(); ctx.arc(lx + 4, ly + 3, 2.6, Math.PI, 0); ctx.stroke(); ctx.fillStyle = '#ffd166'; ctx.fillRect(lx, ly + 3, 8, 6);
       }
       x += w + 4;
     }
+    // ipucu: yazılanın nereye gittiği ve Tab'ın ne yaptığı
+    const hint = 'Yazın → ' + lab[this.i] + ' · Tab: ' + (this.f[this.i] ? 'kilitle ve ' : '') + dat[1 - this.i] + ' geç';
+    ctx.font = '10px "Segoe UI", sans-serif'; const hw = ctx.measureText(hint).width + 10;
+    ctx.fillStyle = 'rgba(17,19,23,.78)'; ctx.fillRect(x0, y + 25, hw, 15);
+    ctx.fillStyle = '#aeb6c2'; ctx.fillText(hint, x0 + 5, y + 33);
     ctx.restore();
-    if (this.dirty()) requestAnimationFrame(() => this.R.request());
+    // imleç yanıp sönsün: sahneyi her karede değil, yarım saniyede bir yeniden çiz
+    clearTimeout(this._blinkT); this._blinkT = setTimeout(() => { if (this.mode()) this.R.request(); }, 530);
   }
 }
 

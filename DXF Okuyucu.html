@@ -149,7 +149,7 @@
   #gzBar button:hover { background: var(--panel3); }
   #gzBar button.on { background: var(--accent2); color: #fff; }
   #gzBar .sep { width: 1px; background: var(--line2); margin: 4px 2px; }
-  /* ViewCube */
+  /* Görünüm küpü */
   #vcube { position: absolute; top: 8px; right: 8px; width: 128px; z-index: 4; user-select: none; }
   #vcube canvas { display: block; cursor: grab; position: static; }
   #vcube .vc-home { position: absolute; left: 0; top: 0; width: 24px; height: 24px; border-radius: 6px; border: 1px solid var(--line2); background: rgba(25,28,33,.85); cursor: pointer; padding: 3px; color: var(--text); }
@@ -213,6 +213,8 @@
   .help td { padding: 3px 10px 3px 0; vertical-align: top; }
   .set { display: grid; grid-template-columns: 170px 1fr; gap: 4px 18px; width: min(640px, 86vw); }
   .dgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; width: min(520px, 86vw); }
+  .dgrid h4 { grid-column: 1 / -1; margin: 12px 0 0; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; border-bottom: 1px solid var(--line); padding-bottom: 3px; }
+  .dgrid h4:first-child { margin-top: 0; } .dgrid h4 small { text-transform: none; letter-spacing: 0; font-weight: 400; }
   .dclr { display: flex; gap: 6px; align-items: center; }
   .dclr i { width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--line2); flex: none; }
   .dprev { width: 100%; height: 64px; background: var(--bg); border: 1px solid var(--line2); border-radius: 7px; }

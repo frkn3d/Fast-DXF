@@ -447,9 +447,9 @@ class Store {
     return out;
   }
 
-  // ── Nesne yakalama (AutoCAD OSNAP). modes: {end, mid, cen, quad, int, perp, near, node, ins}; base: perp için önceki nokta
+  // ── Nesne yakalama. modes: {end, mid, cen, quad, int, perp, near, node, ins}; base: perp için önceki nokta
   // Dönüş: {p:[x,y,z], kind} ya da null. Öncelik: uç/düğüm/ekleme > kesişim > orta/merkez/çeyrek > dik > yakın
-  // extra (isteğe bağlı): { armed: Map(id → merkez) — üzerinde beklenmiş daire/yay/elipsler (merkez yalnız bunlarda önerilir, AutoCAD gibi),
+  // extra (isteğe bağlı): { armed: Map(id → merkez) — üzerinde beklenmiş daire/yay/elipsler (merkez yalnız bunlarda önerilir),
   //   curves: [] — çıktı: imlecin üzerinde durduğu eğriler {id, c:[x,y,z]}, toolPts: [[x,y,z]] — çizilmekte olan nesnenin noktaları }
   snap(x, y, tol, modes, base, extra) {
     modes = modes || { end: true };

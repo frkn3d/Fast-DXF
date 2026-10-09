@@ -1,5 +1,5 @@
 /* Fast DXF — görünüm yardımcıları
- *  · Sol alt köşede eksen göstergesi (3ds Max gibi): X kırmızı, Y yeşil, Z mavi; görünümle birlikte döner
+ *  · Sol alt köşede eksen göstergesi: X kırmızı, Y yeşil, Z mavi; görünümle birlikte döner
  *  · 0,0,0 başlangıç noktası: soluk eksen çizgileri ve küçük üçlü
  *  · 3B görünümde hafif zemin ızgarası (plan ızgarasıyla aynı adım mantığı; her 5 aralıkta koyu çizgi) */
 'use strict';

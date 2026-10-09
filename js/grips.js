@@ -1,4 +1,4 @@
-/* Fast DXF — nokta tutamaçları (AutoCAD grip düzenleme)
+/* Fast DXF — nokta tutamaçları (grip düzenleme)
  *  Seçili nesnelerin (en çok 100) uç, köşe, orta, merkez, çeyrek ve ölçü tanım noktalarında mavi kareler.
  *  Kareye tıklayın (kırmızı olur) → yeni yere tıklayın; ya da basılı tutup sürükleyin. Yakalama, hizalama ve
  *  dinamik giriş (uzunluk / açı, Tab ile kilit) bu sırada da çalışır. Esc / sağ tık: vazgeç.

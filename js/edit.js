@@ -3,7 +3,7 @@
  * Yeni nesneler (çizim, budama sonuçları…) DXF metni olarak üretilip ayrıştırıcıdan geçirilir: ekrandaki = kaydedilen. */
 'use strict';
 
-const NO_MOVE_TYPES = new Set([12, 20]); // DIMENSION, ACAD_TABLE: blok tabanlı, AutoCAD'de eski yerinde kalır
+const NO_MOVE_TYPES = new Set([12, 20]); // DIMENSION, ACAD_TABLE: blok tabanlı, CAD programında eski yerinde kalır
 const T_ID = [1, 0, 0, 1, 0, 0, 1, 0];
 
 class Editor {

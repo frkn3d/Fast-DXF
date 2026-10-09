@@ -6,7 +6,7 @@ const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 const fmtN = (n) => n.toLocaleString('tr-TR');
 const fmtMB = (b) => (b / 1048576).toLocaleString('tr-TR', { maximumFractionDigits: 1 }) + ' MB';
 const num = (s) => { if (s === undefined || s === null) return NaN; s = String(s).trim().replace(/\s/g, ''); if (!s) return NaN; if (s.indexOf(',') >= 0 && s.indexOf('.') < 0) s = s.replace(',', '.'); return +s; };
-const UNITS = { 0: 'birimsiz', 1: 'inç', 2: 'fit', 4: 'mm', 5: 'cm', 6: 'metre', 7: 'km' };
+const UNITS = { 0: 'birimsiz', 1: 'inç', 2: 'fit', 4: 'milimetre', 5: 'santimetre', 6: 'metre', 7: 'kilometre' };
 const UNIT_SFX = { 1: ' in', 2: ' ft', 4: ' mm', 5: ' cm', 6: ' m', 7: ' km' };
 const ISO = 35.264;
 // Hazır görünümler (az: göz yönünün X ekseninden açısı, el: yükseklik açısı; Z yukarı)
@@ -86,11 +86,13 @@ const SNAP_MODES = [['end', 'Uç nokta', '□'], ['mid', 'Orta nokta', '△'], [
   ['perp', 'Dik', '⊥'], ['near', 'En yakın', '⧗'], ['node', 'Düğüm (nokta nesnesi)', '⊗'], ['ins', 'Ekleme noktası (blok, yazı)', '⊡']];
 const SNAP_NAME = Object.fromEntries(SNAP_MODES.map(m => [m[0], m[1]]));
 const DEFAULT_SNAP = { end: true, mid: true, cen: true, quad: false, int: true, perp: false, near: false, node: true, ins: true };
-const DEFAULT_SETTINGS = { theme: 'dark', grid: true, aperture: 12, snapLabels: true, snap: DEFAULT_SNAP, gizmo: true, dynInput: true, wheelInvert: false, zoomSpeed: 1, textLimit: 25000, newUnits: 6, style: 'wire', otrack: true, polar: true, polarInc: 90,
+const DEFAULT_SETTINGS = { theme: 'dark', grid: true, aperture: 12, snapLabels: true, snap: DEFAULT_SNAP, gizmo: true, dynInput: true, wheelInvert: false, zoomSpeed: 1, textLimit: 25000, newUnits: 5, style: 'wire', otrack: true, polar: true, polarInc: 90,
   dynFields: true, grips: true, originMark: true, axisTripod: true };
 function loadSettings() {
   let o = {}; try { o = JSON.parse(localStorage.getItem('fastdxf.settings') || '{}') || {}; } catch (e) { o = {}; }
   const st = Object.assign({}, DEFAULT_SETTINGS, o); st.snap = Object.assign({}, DEFAULT_SNAP, o.snap || {});
+  // ayar sürümü 2: yeni çizim birimi varsayılanı santimetre (eski kayıtlarda metre kalmışsa)
+  if (!(o.settingsVer >= 2)) { if (o.newUnits === undefined || o.newUnits === 6) st.newUnits = 5; st.settingsVer = 2; }
   return st;
 }
 function saveSettings(st) { try { localStorage.setItem('fastdxf.settings', JSON.stringify(st)); } catch (e) { /* özel pencerede saklanamayabilir */ } }
@@ -100,7 +102,8 @@ class App {
     this.core = DXFCore();
     // eklenti kancaları: snap() yakalamadan sonra · point(p, base) → nokta ya da null · preview(ctx) · distance(L, base) → nokta ya da null · tool(name) araç değişince
     // under(ctx) ızgaranın hemen üstüne (araç önizlemesinin altına) çizer
-    this.hooks = { snap: [], point: [], preview: [], distance: [], tool: [], under: [] };
+    // props(P, ids) özellikler paneline seçim kartı ekler
+    this.hooks = { snap: [], point: [], preview: [], distance: [], tool: [], under: [], props: [] };
     this.cenArmed = new Map();   // üzerinde beklenmiş daire/yay/elips → merkez (merkez yakalama yalnız bunlarda)
     this.store = new Store(this.core);
     try { this.R = new Renderer($('gl'), $('ov'), this.store); }
@@ -118,7 +121,7 @@ class App {
     this.R.preview = (ctx) => this.drawPreview(ctx);
     this.R.onDraw = () => this.afterDraw();
     this.R.setTheme(this.settings.theme !== 'light');
-    this.vc = new ViewCube(this, $('view'));
+    this.vc = new ViewCubeW(this, $('view'));
     this.initTools();
     for (const pl of FastDXF.plugins) { try { pl.init(this); } catch (e) { console.error('Eklenti başlatılamadı: ' + pl.name, e); } }
     this.applySettings();
@@ -126,6 +129,8 @@ class App {
     this.setTool('select');
     new ResizeObserver(() => { this.R.resize(); }).observe($('view'));
     this.updateButtons(); this.update3DUI(); this.updateDoc();
+    // açılışta doğrudan boş çizim (tek katman); dosya sürükleyip bırakarak ya da Ctrl+O ile açılır
+    setTimeout(() => { if (!this.store.file) this.newDrawing(); }, 0);
   }
 
   // ───────────── eklenti bağlantı noktaları
@@ -202,7 +207,9 @@ class App {
   async newDrawing() {
     if (this.store.dirty && !await this.confirm('Kaydedilmemiş değişiklikler var. Yine de yeni çizime başlansın mı?')) return;
     const u = this.settings.newUnits | 0;
-    const txt = NEW_DXF_TEMPLATE.replace('$INSUNITS\n 70\n6\n', '$INSUNITS\n 70\n' + u + '\n');
+    let txt = NEW_DXF_TEMPLATE.replace('$INSUNITS\n 70\n6\n', '$INSUNITS\n 70\n' + u + '\n');
+    if (u === 1 || u === 2) txt = txt.replace('$MEASUREMENT\n 70\n1\n', '$MEASUREMENT\n 70\n0\n');   // inç / fit: İngiliz ölçü sistemi
+    txt = withStartLayer(txt, START_LAYER);
     this.load(new File([txt], 'Yeni çizim.dxf', { type: 'application/dxf' }), null, { isNew: true, force: true });
   }
   async load(file, handle, opts) {
@@ -250,7 +257,9 @@ class App {
         S.onDone(d);
         S.isNew = !!(this.loadOpts && this.loadOpts.isNew);
         $('prog').style.display = 'none';
-        this.curLayer = S.layerVis[0] ? 0 : Math.max(0, S.layers.findIndex((L, i) => S.layerVis[i]));
+        // aktif katman: yeni çizimde başlangıç katmanı; dosyada "0" (yoksa ilk görünür katman)
+        const sl = S.isNew ? S.layers.findIndex(L => L.name === START_LAYER) : -1;
+        this.curLayer = sl >= 0 ? sl : S.layerVis[0] ? 0 : Math.max(0, S.layers.findIndex((L, i) => S.layerVis[i]));
         this.R.zcr = S.zview.slice();
         if (!this.userMoved) this.R.fit(S.view0);
         this.R.updateLayers(); this.renderLayers(); this.renderProps(); this.updateButtons(); this.update3DUI(); this.updateDoc();
@@ -258,7 +267,7 @@ class App {
         const bad = S.suspiciousBlocks();
         if (bad.blocks) this.setBlockFlat(true);
         const faces = S.nTri ? ' · ' + fmtN(Math.round(S.nTri)) + ' yüzey üçgeni (Gölgeli stilde görünür)' : '';
-        if (S.isNew) { this.toast('Yeni çizim hazır (' + (UNITS[d.units] || 'birimsiz') + '). Çizmeye başlayın: L, PL, C… · Katman eklemek için sol paneldeki "Yeni".', 6000); this.setTool('select'); this.updateDoc(); break; }
+        if (S.isNew) { this.toast('Yeni çizim hazır (' + (UNITS[d.units] || 'birimsiz') + '). Çizmeye başlayın: L, PL, C… · DXF açmak için dosyayı buraya sürükleyin ya da Ctrl+O.', 6000); this.setTool('select'); this.updateDoc(); break; }
         this.toast(S.file.name + ' açıldı: ' + fmtN(S.nEnt) + ' nesne, ' + sec + ' sn' + (S.has3D ? ' · 3B veri var (Shift + orta tuş ile yörünge)' : '') + faces +
           (bad.blocks ? ' · ' + bad.blocks + ' sembol bloğunun iç kotu hatalı görünüyor (' + fmtN(bad.refs) + ' referans); 3B görünümde ekleme kotunda düz çiziliyor.' : ''), bad.blocks ? 9000 : 5000);
         if (!d.eof && !d.binary) this.toast('Uyarı: dosya EOF ile bitmiyor (yarım kalmış olabilir). Okunabilen kısım gösteriliyor.', 6000);
@@ -337,7 +346,7 @@ class App {
       const b = E.bb.a; bb[0] = Math.min(bb[0], b[4 * id]); bb[1] = Math.min(bb[1], b[4 * id + 1]); bb[2] = Math.max(bb[2], b[4 * id + 2]); bb[3] = Math.max(bb[3], b[4 * id + 3]);
       z0 = Math.min(z0, E.zr.a[2 * id]); z1 = Math.max(z1, E.zr.a[2 * id + 1]);
     }
-    const layOpts = S.layers.map((L, i) => [L.name, i]).sort((a, b) => a[0].localeCompare(b[0], 'tr', { numeric: true }))
+    const layOpts = S.layers.map((L, i) => [L.name, i]).filter(([n, i]) => !(this.layers && this.layers.sysHidden(i)) && !S.layers[i].deleted).sort((a, b) => a[0].localeCompare(b[0], 'tr', { numeric: true }))
       .map(([n, i]) => '<option value="' + i + '">' + esc(n) + '</option>').join('');
     const types = Object.entries(cnt);
     let html = '<table>' + tr('Seçili', fmtN(ids.length)) + tr('Tipler', types.map(([k, v]) => '<span class="pill' + (types.length > 1 ? ' sel' : '') + '" data-type="' + esc(k) + '"' + (types.length > 1 ? ' title="Seçimi yalnız bu tiple sınırla"' : '') + '>' + esc(k) + ' ' + fmtN(v) + '</span>').join(''));
@@ -406,6 +415,7 @@ class App {
     $('pIso').onclick = () => { const Ls = new Set(S.selList.map(id => E.layer.a[id])); this.setLayerVis(i => Ls.has(i)); this.toast(Ls.size + ' katman gösteriliyor'); };
     $('pClear').onclick = () => { S.clearSel(); this.selChanged(); };
     if ($('pRaw')) $('pRaw').onclick = () => this.showRaw(ids[0]);
+    for (const h of this.hooks.props) h(P, ids);
   }
   afterXform() { this.gizmo.invalidate(); this.selChanged(); }
   async showRaw(id) {
@@ -710,7 +720,7 @@ class App {
     this.armCurves(extra.curves);
     for (const h of this.hooks.snap) h();
   }
-  // Daire/yay/elips üzerinde ~0,4 sn beklenince merkezi yakalanabilir olur (AutoCAD gibi); en çok 4 eğri hatırlanır
+  // Daire/yay/elips üzerinde ~0,4 sn beklenince merkezi yakalanabilir olur; en çok 4 eğri hatırlanır
   armCurves(curves) {
     if (!this.snapModes.cen || !curves.length) { this._arm = null; return; }
     curves.sort((a, b) => a.d - b.d);
@@ -812,7 +822,7 @@ class App {
     return true;
   }
   newDef(type, props) { return Object.assign({ type, li: this.curLayer }, props); }
-  // tek nesnelik çizim araçları (AutoCAD gibi) bitince seçime döner
+  // tek nesnelik çizim araçları bitince seçime döner
   done1() { if (this.toolName !== 'select') this.setTool('select'); }
 
   // ───────────── araçlar
@@ -825,7 +835,11 @@ class App {
       ctx.strokeStyle = color || '#4c9aff'; if (dash) ctx.setLineDash(dash);
       ctx.beginPath(); P.forEach((q, i) => { const s = R.w2s(q[0], q[1], q[2]); i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]); }); if (closed) ctx.closePath(); ctx.stroke(); ctx.setLineDash([]);
     };
-    const label = (ctx, txt, p) => { const s = R.w2s(p[0], p[1], p[2]); ctx.font = '12px Segoe UI, sans-serif'; ctx.fillStyle = '#ffd166'; ctx.textAlign = 'center'; ctx.fillText(txt, s[0], s[1] - 8); };
+    // önizleme etiketi; dinamik giriş alanları açıkken imlecin sağındaki kutularla çakışmasın diye sola yaslanır
+    const label = (ctx, txt, p) => {
+      const s = R.w2s(p[0], p[1], p[2]), dyn = app.dyn && app.dyn.mode(); ctx.font = '12px Segoe UI, sans-serif'; ctx.fillStyle = '#ffd166';
+      if (dyn) { ctx.textAlign = 'right'; ctx.fillText(txt, s[0] - 12, s[1] - 12); } else { ctx.textAlign = 'center'; ctx.fillText(txt, s[0], s[1] - 8); }
+    };
     const circ = (c, r, n) => { const P = []; for (let i = 0; i <= (n || 72); i++) { const a = i / (n || 72) * 2 * Math.PI; P.push([c[0] + r * Math.cos(a), c[1] + r * Math.sin(a)]); } return P; };
     const pickEnt = (p) => S.grid ? S.pick(p[0], p[1], 8 / R.scale) : -1;
     const selTool = (name, mk) => Object.assign({ wantsPoints: true, start() { if (!app.ready() || !app.needSel(app.toolName)) return false; if (this.init) this.init(); } }, mk);
@@ -864,7 +878,7 @@ class App {
       },
       pan: { prompt: () => 'Kaydır: sol tuşla sürükleyin', down(p, e) { app.startPan(e); } },
       orbit: {
-        prompt: () => '3B yörünge: sol tuşla sürükleyin (her araçta: Shift + orta tuş) · ViewCube: hazır görünümler · Esc: bitir',
+        prompt: () => '3B yörünge: sol tuşla sürükleyin (her araçta: Shift + orta tuş) · Görünüm küpü: hazır görünümler · Esc: bitir',
         down(p, e) { app.beginOrbit(); this.drag = { x: e.offsetX, y: e.offsetY }; },
         move(e) { const d = this.drag; if (d) { app.orbitBy(e.offsetX - d.x, e.offsetY - d.y); d.x = e.offsetX; d.y = e.offsetY; } },
         up() { if (this.drag) { this.drag = null; app.endOrbit(); } }
@@ -893,7 +907,7 @@ class App {
           this.base = p;
         },
         input(s) { const p = app.parsePoint(s, this.base); if (!p) return false; this.click(p); return true; },
-        preview(ctx) { if (this.base) { app.rubber(ctx, this.base, app.point(this.base)); const c = app.point(this.base); const b = this.base, dz = (c[2] || 0) - (b[2] || 0), L = Math.hypot(c[0] - b[0], c[1] - b[1], R.is2D ? 0 : dz); label(ctx, fmtC(L), [(c[0] + b[0]) / 2, (c[1] + b[1]) / 2, ((c[2] || 0) + (b[2] || 0)) / 2]); } }
+        preview(ctx) { if (this.base) { app.rubber(ctx, this.base, app.point(this.base)); const c = app.point(this.base); const b = this.base, dz = (c[2] || 0) - (b[2] || 0), L = Math.hypot(c[0] - b[0], c[1] - b[1], R.is2D ? 0 : dz); if (!(app.dyn && app.dyn.mode())) label(ctx, fmtC(L), [(c[0] + b[0]) / 2, (c[1] + b[1]) / 2, ((c[2] || 0) + (b[2] || 0)) / 2]); } }   // uzunluk dinamik girişte zaten görünür
       },
       pline: {
         wantsPoints: true, pts: [],
@@ -1276,7 +1290,7 @@ class App {
   setTool(name) {
     const t = this.tools[name]; if (!t) return;
     if (planOnly(name) && !this.R.is2D) {
-      this.toast('Bu araç plan (üst) görünümde çalışır. ViewCube\'da ÜST\'e tıklayın ya da "plan" yazın. (Çizim araçları, Taşı/Kopyala ve ölçüm 3B\'de de çalışır.)', 4500);
+      this.toast('Bu araç plan (üst) görünümde çalışır. Sağ üstteki görünüm küpünde ÜST\'e tıklayın ya da "plan" yazın. (Çizim araçları, Taşı/Kopyala ve ölçüm 3B\'de de çalışır.)', 4500);
       if (this.toolName) return; name = 'select';
     }
     if (this.tool && this.tool.cancel) this.tool.cancel();
@@ -1406,7 +1420,7 @@ class App {
   flattenDialog() {
     const S = this.store; if (!this.ready()) return;
     if (!S.selList.length) { this.toast('Önce kot atanacak nesneleri seçin.'); return; }
-    this.modal('<h2>Kot ata (düzleştir)</h2><div style="color:var(--muted);max-width:440px;font-size:12px">Seçili ' + fmtN(S.selList.length) + ' nesnenin tüm Z değerleri verilen kota eşitlenir (AutoCAD FLATTEN). Bloklarda yalnız ekleme kotu değişir.</div>' +
+    this.modal('<h2>Kot ata (düzleştir)</h2><div style="color:var(--muted);max-width:440px;font-size:12px">Seçili ' + fmtN(S.selList.length) + ' nesnenin tüm Z değerleri verilen kota eşitlenir (FLATTEN). Bloklarda yalnız ekleme kotu değişir.</div>' +
       '<label>Z değeri</label><input type="text" id="fz" value="0"><div class="btns"><button class="btn" id="mNo">Vazgeç</button><button class="btn pri" id="mOk">Uygula</button></div>', d => {
       const ok = () => { const z = num(d.querySelector('#fz').value); this.closeModal(); if (isFinite(z)) { this.editor.flatten(S.selList.slice(), z); this.afterXform(); } };
       d.querySelector('#mOk').onclick = ok; d.querySelector('#mNo').onclick = () => this.closeModal();
@@ -1593,12 +1607,12 @@ class App {
     const cmds = Object.entries(groups).map(([g, list]) => '<h4>' + esc(g) + '</h4><table class="help">' + list.map(c => '<tr><td><kbd>' + c[0].slice(0, 3).map(esc).join('</kbd> <kbd>') + '</kbd></td><td>' + esc(c[3]) + '</td></tr>').join('') + '</table>').join('');
     const mouse = [['Sol tık / sürükle', 'Seç · pencere (sağa: tamamen içindeki, sola: kesişen) · Shift: ekle/çıkar'], ['Tekerlek', 'İmlecin olduğu yere yakınlaş'], ['Orta / sağ tuş sürükle', 'Kaydır'],
       ['Shift + orta tuş', '3B yörünge'], ['Orta tuş çift tık', 'Çizime sığdır'], ['Seçim tutamacı', 'Oklar: X/Y/Z yönünde taşı · halka: döndür · kareler: ölçekle (Shift: adımlı)'],
-      ['ViewCube', 'Yüz/kenar/köşe: hazır görünüm · sürükle: döndür · ⌂: ev'], ['Enter / boşluk / sağ tık', 'Komutu bitir · boş satırda son komutu tekrarla'], ['Esc', 'İptal / seçimi bırak'],
+      ['Görünüm küpü', 'Yüz/kenar/köşe: hazır görünüm · sürükle: döndür · ⌂: ev'], ['Enter / boşluk / sağ tık', 'Komutu bitir · boş satırda son komutu tekrarla'], ['Esc', 'İptal / seçimi bırak'],
       ['Delete', 'Seçileni sil'], ['Ctrl+Z / Ctrl+Y', 'Geri al / yinele'], ['Ctrl+A / Ctrl+F', 'Hepsini seç / metin bul'], ['F3 / F8', 'Yakalama / orto'], ['F10', 'Kutupsal izleme'], ['Ctrl+O / Ctrl+S', 'Aç / kaydet'],
       ['Sayı + Tab', 'Çizerken: uzunluğu (ya da açıyı) kilitle, diğer alana geç · Enter: noktayı koy'], ['Mavi tutamaç', 'Seçili nesnenin noktasına tıklayın, yeni yere tıklayın (uzat / taşı)'],
       ['Daire üzerinde bekle', 'Merkez yakalaması etkinleşir']];
     this.modal('<h2>Komutlar ve kısayollar</h2><div style="display:grid;grid-template-columns:1fr 1fr;gap:0 28px;max-width:860px"><div><h4>Fare ve klavye</h4><table class="help">' + mouse.map(r => '<tr><td><kbd>' + r[0] + '</kbd></td><td>' + r[1] + '</td></tr>').join('') + '</table>' +
-      '<h4>Değer girişi</h4><div style="color:var(--muted);font-size:12px">x,y[,z] mutlak · @dx,dy göreli · @uzunluk&lt;açı kutupsal · tek sayı: imleç yönünde uzunluk, yarıçap, açı ya da çarpan.<br>Harf yazınca komut satırına gider; AutoCAD kısaltmaları geçerlidir.</div></div><div>' + cmds + '</div></div>' +
+      '<h4>Değer girişi</h4><div style="color:var(--muted);font-size:12px">x,y[,z] mutlak · @dx,dy göreli · @uzunluk&lt;açı kutupsal · tek sayı: imleç yönünde uzunluk, yarıçap, açı ya da çarpan.<br>Harf yazınca komut satırına gider; Kısa komut adları geçerlidir.</div></div><div>' + cmds + '</div></div>' +
       '<div class="btns"><button class="btn pri" id="mOk">Kapat</button></div>', d => d.querySelector('#mOk').onclick = () => this.closeModal());
   }
 
@@ -1749,6 +1763,7 @@ class App {
     const st = this.settings, R = this.R;
     R.setTheme(st.theme !== 'light'); $('view').style.background = R.dark ? '#1b1e23' : '#fff';
     R.textLimit = st.textLimit; this.gizmo.enabled = !!st.gizmo;
+    const nh = document.querySelector('#ddFile [data-cmd="new"] .hint'); if (nh) nh.textContent = 'Boş bir çizimle başlayın (' + (UNITS[st.newUnits] || 'santimetre') + ')';
     if (st.style && st.style !== R.style) R.style = st.style;
     this.renderLayers(); this.vc.draw(); this.update3DUI(); this.updateButtons(); R.request();
   }
@@ -1766,7 +1781,7 @@ class App {
       row('Varsayılan görsel stil', 'Dosya açılınca', sel('style', [['wire', 'Tel kafes'], ['hidden', 'Gizli çizgi'], ['shaded', 'Gölgeli']])) +
       row('Izgara', 'Plan ve 3B görünümde uyarlanır ızgara', sw('grid', st.grid)) +
       row('Başlangıç noktası', '0,0,0 noktasını eksen çizgileriyle hafifçe göster', sw('originMark', st.originMark)) +
-      row('Eksen göstergesi', 'Sol alt köşede X / Y / Z yönleri (3ds Max gibi)', sw('axisTripod', st.axisTripod)) +
+      row('Eksen göstergesi', 'Sol alt köşede X / Y / Z yönleri', sw('axisTripod', st.axisTripod)) +
       row('Yazı sınırı', 'Uzaktan bakarken aynı anda çizilen en çok yazı', sel('textLimit', [[5000, '5.000'], [25000, '25.000'], [100000, '100.000'], [1000000, 'Sınırsız']])) +
       '<h4>Nesne yakalama</h4>' +
       row('Hassasiyet', 'İmlecin yakalama yarıçapı', rng('aperture', 4, 30, 1, fmts.aperture)) +
@@ -1774,14 +1789,14 @@ class App {
       row('Modlar', 'Durum çubuğundaki YAKALA ▴ menüsünden', '<button class="mini" id="setSnap">Yakalama modlarını aç</button>') +
       '<h4>Düzenleme</h4>' +
       row('Seçim tutamacı', 'Seçimde X/Y/Z taşı · döndür · ölçekle tutamacı', sw('gizmo', st.gizmo)) +
-      row('Dinamik komut girişi', 'Çizim alanında harf yazınca komut satırına gider (AutoCAD gibi)', sw('dynInput', st.dynInput)) +
+      row('Dinamik komut girişi', 'Çizim alanında harf yazınca komut satırına gider', sw('dynInput', st.dynInput)) +
       row('İmleçte uzunluk / açı', 'Sayı yazınca imlecin yanındaki alana girer; Tab: alan değiştir ve değeri kilitle', sw('dynFields', st.dynFields)) +
       row('Nokta tutamaçları', 'Seçili nesnelerin uç / orta / merkez noktalarından düzenleme', sw('grips', st.grips)) +
       '<h4>Fare</h4>' +
       row('Tekerlek yönü', 'Yakınlaştırma yönünü ters çevir', sw('wheelInvert', st.wheelInvert)) +
       row('Yakınlaştırma hızı', '', rng('zoomSpeed', 0.3, 3, 0.1, fmts.zoomSpeed)) +
       '<h4>Yeni çizim</h4>' +
-      row('Birim', 'Dosya → Yeni çizim için', sel('newUnits', [[4, 'Milimetre'], [5, 'Santimetre'], [6, 'Metre'], [7, 'Kilometre']])) +
+      row('Birim', 'Dosya → Yeni çizim için', sel('newUnits', [[4, 'Milimetre'], [5, 'Santimetre'], [6, 'Metre'], [7, 'Kilometre'], [1, 'İnç'], [2, 'Fit']])) +
       '</div><div class="btns"><button class="btn" id="setReset">Varsayılanlara dön</button><button class="btn pri" id="mOk">Kapat</button></div>', d => {
       d.querySelectorAll('[data-sw]').forEach(b => b.onclick = () => { const k = b.dataset.sw; b.classList.toggle('on'); this.setSetting(k, b.classList.contains('on')); });
       d.querySelectorAll('[data-sel]').forEach(el => el.onchange = () => { const k = el.dataset.sel, v = el.value; this.setSetting(k, /^\d+$/.test(v) ? +v : v); });
@@ -1958,7 +1973,7 @@ class App {
       if (k === 'F1') { e.preventDefault(); this.helpDialog(); return; }
       if (k === 'F3') { e.preventDefault(); this.toggleSnap(); return; }
       if (k === 'F8') { e.preventDefault(); this.toggleOrtho(); return; }
-      // harf / rakam: komut satırına (AutoCAD dinamik giriş)
+      // harf / rakam: komut satırına (dinamik giriş)
       if (this.settings.dynInput && k.length === 1 && /[\p{L}\d@.\-]/u.test(k)) { cmd.focus(); return; }
     });
     window.addEventListener('beforeunload', (e) => { if (this.store.dirty) { e.preventDefault(); e.returnValue = ''; } });
@@ -1998,7 +2013,7 @@ class App {
     const t = this.tool;
     if (t.enter && t.enter()) { this.updatePrompt(); this.R.request(); return; }
     if (this.toolName !== 'select') { this.setTool('select'); return; }
-    // boş Enter: son komutu tekrarla (AutoCAD)
+    // boş Enter: son komutu tekrarla
     if (fromKey && this.lastCmd) { const n = this.lastCmd; if (this.tools[n]) this.setTool(n); else this.runCommand(n); }
   }
   rightClick() {
@@ -2016,6 +2031,16 @@ class App {
   }
 }
 
+// Yeni çizimin tek görünen katmanı. "0" ve "Defpoints" DXF için zorunludur; dosyada kalır, boşken listede gizlenir.
+const START_LAYER = 'Genel';
+function withStartLayer(txt, name) {
+  const m = /\$HANDSEED\n  5\n([0-9A-Fa-f]+)\n/.exec(txt); if (!m) return txt;
+  const h = m[1].toUpperCase(), next = (parseInt(h, 16) + 1).toString(16).toUpperCase();
+  const def = txt.indexOf('\n  2\nDefpoints\n'), end = def >= 0 ? txt.indexOf('  0\nENDTAB\n', def) : -1; if (end < 0) return txt;
+  const rec = '  0\nLAYER\n  5\n' + h + '\n330\n1\n100\nAcDbSymbolTableRecord\n100\nAcDbLayerTableRecord\n  2\n' + name + '\n 70\n0\n 62\n7\n  6\nContinuous\n370\n-3\n390\n13\n347\n21\n';
+  txt = txt.slice(0, end) + rec + txt.slice(end);
+  return txt.replace(m[0], '$HANDSEED\n  5\n' + next + '\n').replace('$CLAYER\n  8\n0\n', '$CLAYER\n  8\n' + name + '\n');
+}
 function tr(k, v) { return '<tr><td>' + k + '</td><td>' + v + '</td></tr>'; }
 function fmtP(x, y) { return 'X ' + fmtC(x) + '<br>Y ' + fmtC(y); }
 function fmtC(v) { if (!isFinite(v)) return '—'; const a = Math.abs(v); return v.toLocaleString('tr-TR', { maximumFractionDigits: a >= 1000 ? 3 : a >= 1 ? 4 : 6 }); }

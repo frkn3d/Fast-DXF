@@ -1,4 +1,4 @@
-/* Fast DXF — seçim dönüşüm tutamacı (gizmo), 3ds Max tarzı:
+/* Fast DXF — seçim dönüşüm tutamacı (gizmo):
  *  Taşı    : X/Y/Z okları (tek eksen), XY/YZ/XZ kareleri (düzlem), merkez (ekran düzleminde serbest)
  *  Döndür  : X/Y/Z halkaları (ön yarı etkin), dış gri halka (ekran ekseni)
  *  Ölçekle : X/Y/Z uçları (tek eksen), eksen arası şeritler (iki eksen), merkez (orantılı)
@@ -159,7 +159,7 @@ class Gizmo {
       else {
         const u = GZ_AX[handle]; D.axis = u;
         const { pts, e: E2 } = this.ring(g, handle, 144); D.e = E2;
-        // halka ekrana dönükse düzlemde açı izle; yan görünüyorsa teğet boyunca sürükle (3ds Max)
+        // halka ekrana dönükse düzlemde açı izle; yan görünüyorsa teğet boyunca sürükle
         const fd = Math.abs(gzDot(gzNorm([u[0], u[1], u[2] * zs]), g.f));
         if (fd > 0.3) { D.plane = true; const p = this.rayPlane(ray, O, u); D.a0 = p ? this.ang(D, p) : 0; }
         else {

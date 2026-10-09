@@ -880,7 +880,7 @@ function DXFCore() {
   const S_NONE = 0, S_HEADER = 1, S_TABLES = 2, S_BLOCKS = 3, S_ENT = 4, S_OTHER = 5;
   const DEG = Math.PI / 180;
 
-  // AutoCAD keyfi eksen algoritması: çıkış yönü N → OCS eksenleri [Ax, Ay, N] (9 sayı). N ±Z ise null (eski hızlı yol).
+  // DXF keyfi eksen algoritması: çıkış yönü N → OCS eksenleri [Ax, Ay, N] (9 sayı). N ±Z ise null (eski hızlı yol).
   function arbAxis(nx, ny, nz) {
     const l = Math.hypot(nx, ny, nz); if (!(l > 0)) return null;
     nx /= l; ny /= l; nz /= l;
@@ -1510,7 +1510,7 @@ function DXFCore() {
   }
   const norm360 = (a) => { a %= 360; if (a < 0) a += 360; return Math.abs(a - 360) < 1e-9 ? 0 : a; };
   function xfAng(X, deg) { return norm360(X.th * R2D + (X.mir ? -deg : deg)); }
-  // Aynalamada yazı okunur kalsın (AutoCAD MIRRTEXT=0): yansıyan doğrultunun iki yönünden asıl açıya yakın olanı
+  // Aynalamada yazı okunur kalsın (MIRRTEXT=0): yansıyan doğrultunun iki yönünden asıl açıya yakın olanı
   function xfTextAng(X, deg) {
     const a = xfAng(X, deg); if (!X.mir) return a;
     const b = norm360(a + 180), d = (u) => { const x = Math.abs(norm360(u - deg)); return Math.min(x, 360 - x); };
@@ -2173,7 +2173,7 @@ function DXFCore() {
       if (va) p(73, va);
     } else if (t === 'SOLID') {
       head('SOLID', 'AcDbTrace');
-      const zz = z(def.z), Q = def.pts;   // 3 ya da 4 köşe (AutoCAD sırası: 1, 2, 4, 3)
+      const zz = z(def.z), Q = def.pts;   // 3 ya da 4 köşe (DXF sırası: 1, 2, 4, 3)
       for (let i = 0; i < 4; i++) { const q = Q[Math.min(i, Q.length - 1)]; p(10 + i, n(q[0])); p(20 + i, n(q[1])); p(30 + i, zz); }
     } else if (t === 'DIMENSION') {
       const k = def.kind, dd = DIM.norm(def), G = DIM.geom(def), zz = z(def.z);
@@ -2201,7 +2201,7 @@ function DXFCore() {
         if (modern) p(100, 'AcDb3PointAngularDimension');
         P(13, def.x1, def.y1); P(14, def.x2, def.y2); P(15, def.cx, def.cy);
       }
-      // ölçü stili geçersiz kılmaları (AutoCAD DSTYLE XDATA)
+      // ölçü stili geçersiz kılmaları (DSTYLE XDATA)
       p(1001, 'ACAD'); p(1000, 'DSTYLE'); p(1002, '{');
       for (const [code, key, gc] of DIM.OVR) { p(1070, code); p(gc, gc === 1070 ? Math.round(dd[key]) : n(dd[key])); }
       p(1002, '}');

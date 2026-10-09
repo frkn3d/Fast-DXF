@@ -1,8 +1,8 @@
-/* DXF Okuyucu — ViewCube (AutoCAD benzeri görünüm küpü)
+/* DXF Okuyucu — görünüm küpü
  * Yüz / kenar / köşe tıklaması: o yönden bak (26 yön) · küpü sürükle: yörünge · halka: Z etrafında döndür · ev: varsayılan 3B görünüm */
 'use strict';
 
-class ViewCube {
+class ViewCubeW {
   constructor(app, host) {
     this.app = app; this.R = app.R;
     const box = document.createElement('div');
@@ -73,7 +73,7 @@ class ViewCube {
   hit(x, y) {
     const g = this.geom();
     for (let k = 0; k < 6; k++) {
-      const F = ViewCube.FACES[k];
+      const F = ViewCubeW.FACES[k];
       if (-(F.n[0] * g.f[0] + F.n[1] * g.f[1] + F.n[2] * g.f[2]) < 0.02) continue;
       const o = g.P(F.n), ps = g.P([F.n[0] + F.s[0], F.n[1] + F.s[1], F.n[2] + F.s[2]]), pt = g.P([F.n[0] + F.t[0], F.n[1] + F.t[1], F.n[2] + F.t[2]]);
       const ax = ps[0] - o[0], ay = ps[1] - o[1], bx = pt[0] - o[0], by = pt[1] - o[1];
@@ -115,7 +115,7 @@ class ViewCube {
     c.beginPath(); ring.forEach((p, k) => k ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1]));
     c.strokeStyle = hov && hov.key === 'ring' ? acc : edgeC; c.lineWidth = hov && hov.key === 'ring' ? 3 : 2; c.globalAlpha = 0.8; c.stroke(); c.globalAlpha = 1; c.lineWidth = 1;
     // yüzler (arkadan öne)
-    const faces = ViewCube.FACES.map((F, k) => ({ F, k, vis: -(F.n[0] * g.f[0] + F.n[1] * g.f[1] + F.n[2] * g.f[2]) })).filter(o => o.vis > 0.02).sort((a, b) => a.vis - b.vis);
+    const faces = ViewCubeW.FACES.map((F, k) => ({ F, k, vis: -(F.n[0] * g.f[0] + F.n[1] * g.f[1] + F.n[2] * g.f[2]) })).filter(o => o.vis > 0.02).sort((a, b) => a.vis - b.vis);
     const cuts = [-1, -0.6, 0.6, 1];
     for (const { F, k } of faces) {
       const pt = (a, b) => g.P([F.n[0] + F.s[0] * a + F.t[0] * b, F.n[1] + F.s[1] * a + F.t[1] * b, F.n[2] + F.s[2] * a + F.t[2] * b]);
