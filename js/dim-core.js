@@ -1,7 +1,8 @@
 /* Fast DXF — ölçü (DIMENSION) geometrisi: doğrusal, hizalı, yarıçap, çap, açı (3 nokta).
  * Hem arayüzde (önizleme) hem işçide (okuma ve kaydetmede blok üretimi) kullanılır; bu yüzden kendi kendine yeter.
- * def (mutlak WCS): { kind, x1,y1, x2,y2, cx,cy (merkez/tepe), lx,ly (ölçü çizgisi / yay konumu), rot, z, h, asz, exo, exe, gap, dec, sep, text }
- * Çıktı: { segs:[[x1,y1,x2,y2]], tris:[[x1,y1,x2,y2,x3,y3]], texts:[{x,y,h,rot(°),str}], value, tx, ty } */
+ * def (mutlak WCS): { kind, x1,y1, x2,y2, cx,cy (merkez/tepe), lx,ly (ölçü çizgisi / yay konumu), rot, z, h, asz, exo, exe, gap, dec, sep, text,
+ *   tsz (>0: ok yerine eğik çizgi / inşaat "tick"), dle (eğik çizgide ölçü çizgisi taşması), clrd / clre / clrt (ölçü çizgisi / uzatma / yazı rengi, ACI; 0 bloğa göre) }
+ * Çıktı: { segs:[[x1,y1,x2,y2,rol]], tris:[[x1,y1,x2,y2,x3,y3]], texts:[{x,y,h,rot(°),str}], value, tx, ty } — rol: 'd' ölçü çizgisi/ok, 'e' uzatma çizgisi */
 'use strict';
 
 function DXFDimCore() {
@@ -9,7 +10,7 @@ function DXFDimCore() {
   // ISO-25 oranları (yazı yüksekliğine göre)
   function norm(def) {
     const h = def.h > 0 ? def.h : 2.5;
-    return Object.assign({ asz: h, exo: h * 0.25, exe: h * 0.5, gap: h * 0.25, dec: 2, sep: ',', text: '' }, def, { h });
+    return Object.assign({ asz: h, exo: h * 0.25, exe: h * 0.5, gap: h * 0.25, dec: 2, sep: ',', text: '', tsz: 0, dle: 0, clrd: 0, clre: 0, clrt: 0 }, def, { h });
   }
   function fmtVal(d, v, kind) {
     let s = (Math.round(v * Math.pow(10, d.dec)) / Math.pow(10, d.dec)).toFixed(d.dec);
@@ -22,7 +23,10 @@ function DXFDimCore() {
   const upright = (deg) => { while (deg > 90 + 1e-9) deg -= 180; while (deg <= -90 + 1e-9) deg += 180; return deg; };
   function geom(def0) {
     const d = norm(def0), out = { segs: [], tris: [], texts: [], value: 0, tx: 0, ty: 0 };
-    const seg = (a, b) => out.segs.push([a[0], a[1], b[0], b[1]]);
+    const seg = (a, b, role) => out.segs.push([a[0], a[1], b[0], b[1], role || 'd']);
+    const tick = d.tsz > 0;
+    // eğik çizgi (mimari tick): ölçü doğrultusu u'ya 45°, iz düşümleri tsz
+    const stroke = (tip, u) => { const v = [(u[0] - u[1]) * d.tsz / 2, (u[1] + u[0]) * d.tsz / 2]; seg([tip[0] - v[0], tip[1] - v[1]], [tip[0] + v[0], tip[1] + v[1]]); };
     // dolu kapalı ok: uç tip, gövde doğrultusu dir (uçtan içeri)
     const arrow = (tip, dir) => {
       const b = [tip[0] + dir[0] * d.asz, tip[1] + dir[1] * d.asz], w = d.asz / 6, n = [-dir[1] * w, dir[0] * w];
@@ -44,11 +48,12 @@ function DXFDimCore() {
       for (const [P, Q] of [[P1, A], [P2, B]]) {
         const v = [Q[0] - P[0], Q[1] - P[1]], l = Math.hypot(v[0], v[1]); if (l < 1e-12) continue;
         const e = [v[0] / l, v[1] / l];
-        if (l > d.exo) seg([P[0] + e[0] * d.exo, P[1] + e[1] * d.exo], [Q[0] + e[0] * d.exe, Q[1] + e[1] * d.exe]);
+        if (l > d.exo) seg([P[0] + e[0] * d.exo, P[1] + e[1] * d.exo], [Q[0] + e[0] * d.exe, Q[1] + e[1] * d.exe], 'e');
       }
       const len = Math.hypot(B[0] - A[0], B[1] - A[1]); out.value = len;
       const dir = len > 1e-12 ? [(B[0] - A[0]) / len, (B[1] - A[1]) / len] : u;
-      if (len > 2.6 * d.asz) { seg(A, B); arrow(A, dir); arrow(B, [-dir[0], -dir[1]]); }
+      if (tick) { const x = d.dle || 0; seg([A[0] - dir[0] * x, A[1] - dir[1] * x], [B[0] + dir[0] * x, B[1] + dir[1] * x]); stroke(A, dir); stroke(B, dir); }
+      else if (len > 2.6 * d.asz) { seg(A, B); arrow(A, dir); arrow(B, [-dir[0], -dir[1]]); }
       else {   // dar: oklar dışarıda
         const e = d.asz * 1.6;
         seg([A[0] - dir[0] * e, A[1] - dir[1] * e], [B[0] + dir[0] * e, B[1] + dir[1] * e]);
@@ -77,10 +82,13 @@ function DXFDimCore() {
       // uzatma çizgileri (yay ışın üzerindeki noktanın ötesindeyse)
       for (const [P, a] of [[P1, a1], [P2, a2]]) {
         const lp = Math.hypot(P[0] - V[0], P[1] - V[1]), e = [Math.cos(a), Math.sin(a)];
-        if (r > lp + d.exo) seg([V[0] + e[0] * (lp + d.exo), V[1] + e[1] * (lp + d.exo)], [V[0] + e[0] * (r + d.exe), V[1] + e[1] * (r + d.exe)]);
+        if (r > lp + d.exo) seg([V[0] + e[0] * (lp + d.exo), V[1] + e[1] * (lp + d.exo)], [V[0] + e[0] * (r + d.exe), V[1] + e[1] * (r + d.exe)], 'e');
       }
       const e0 = s0, e1 = s0 + sw;
-      if (r * sw > 2.6 * d.asz) {
+      if (tick) {
+        stroke([V[0] + r * Math.cos(e0), V[1] + r * Math.sin(e0)], [-Math.sin(e0), Math.cos(e0)]);
+        stroke([V[0] + r * Math.cos(e1), V[1] + r * Math.sin(e1)], [-Math.sin(e1), Math.cos(e1)]);
+      } else if (r * sw > 2.6 * d.asz) {
         arrow([V[0] + r * Math.cos(e0), V[1] + r * Math.sin(e0)], [-Math.sin(e0), Math.cos(e0)]);
         arrow([V[0] + r * Math.cos(e1), V[1] + r * Math.sin(e1)], [Math.sin(e1), -Math.cos(e1)]);
       }
@@ -93,7 +101,8 @@ function DXFDimCore() {
   const KIND_OF = { 0: 'linear', 1: 'aligned', 3: 'diameter', 4: 'radius', 5: 'angular' };
   const CODE_OF = { linear: 0, aligned: 1, diameter: 3, radius: 4, angular: 5 };
   // XDATA DSTYLE geçersiz kılmaları: DIM değişkeninin grup kodu → alan
-  const OVR = [[140, 'h', 1040], [41, 'asz', 1040], [42, 'exo', 1040], [44, 'exe', 1040], [147, 'gap', 1040], [271, 'dec', 1070]];
+  const OVR = [[140, 'h', 1040], [41, 'asz', 1040], [42, 'exo', 1040], [44, 'exe', 1040], [147, 'gap', 1040], [271, 'dec', 1070],
+    [142, 'tsz', 1040], [46, 'dle', 1040], [176, 'clrd', 1070], [177, 'clre', 1070], [178, 'clrt', 1070]];
   return { geom, norm, fmtVal, upright, KIND_OF, CODE_OF, OVR };
 }
 if (typeof module !== 'undefined' && module.exports) module.exports = DXFDimCore;

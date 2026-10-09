@@ -27,6 +27,8 @@ const news = [
 ].map(d => ({ def: Object.assign({}, base, d) }));
 // döndürülmüş kopya (3B yol olmayan düzlem dönüşüm)
 news.push({ def: Object.assign({}, base, { kind: 'linear', x1: 0, y1: 0, x2: 40, y2: 0, lx: 20, ly: 10, rot: 0 }), ed: { T: [0, -1, 1, 0, 200, 0, 1, 0] } });
+// eğik çizgi (inşaat) uç tipi ve bileşen renkleri (DIMTSZ, DIMCLRD/E/T)
+news.push({ def: Object.assign({}, base, { kind: 'aligned', x1: 100, y1: -40, x2: 140, y2: -40, lx: 120, ly: -32, tsz: 2.5, dle: 1.25, clrd: 1, clre: 3, clrt: 2 }) });
 const info = A.info;
 const msg = { size: bytes.length, mode: 'full', encoding: info.encoding, eol: info.eol, version: info.version, owner: info.modelHandle, handseed: info.handseed, handseedHex: info.handseedHex,
   entStart: info.entStart, entEnd: info.entEnd, ops: [], copies: [], news, newLayers: [], layerEnd: info.layerEnd, layerTableHandle: info.layerTableHandle,
@@ -39,5 +41,18 @@ fs.writeFileSync(process.argv[2] || 'dim_out.dxf', outB);
 const B = parse(outB);
 const dims = B.E.filter(e => e.type === 'DIMENSION');
 console.log('ölçü', dims.length, 'blok örneği', dims.filter(e => e.ic > 0).length, 'yazılar', JSON.stringify(B.TX));
-const ok = dims.length === 6 && dims.every(e => e.ic === 1) && B.TX.length >= 6;
+// renkli ölçünün bloğunda kırmızı ölçü çizgisi (1), yeşil uzatma çizgisi (3), sarı yazı (2), ok yok (eğik çizgi)
+const L = Buffer.from(outB).toString('latin1').split(/\r?\n/), ents = [];
+{
+  let inB = false, cur = null;
+  for (let i = 0; i + 1 < L.length; i += 2) {
+    const c = parseInt(L[i], 10), v = L[i + 1].trim();
+    if (c === 0) { if (cur && inB) ents.push(cur); cur = { type: v, aci: 256 }; if (v === 'ENDBLK') inB = false; }
+    else if (c === 2 && cur && cur.type === 'BLOCK' && v === '*D7') inB = true;
+    else if (c === 62 && cur) cur.aci = +v;
+  }
+}
+const lineCols = [...new Set(ents.filter(e => e.type === 'LINE').map(e => e.aci))], textCols = ents.filter(e => e.type === 'TEXT').map(e => e.aci), solids = ents.filter(e => e.type === 'SOLID').length;
+console.log('renkli ölçü bloğu: çizgi renkleri', lineCols, 'yazı rengi', textCols, 'ok (SOLID)', solids);
+const ok = dims.length === 7 && dims.every(e => e.ic === 1) && B.TX.length >= 7 && lineCols.includes(1) && lineCols.includes(3) && textCols[0] === 2 && solids === 0;
 console.log(ok ? 'TAMAM' : 'HATA');

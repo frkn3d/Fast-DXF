@@ -2,6 +2,8 @@
 
 Büyük DXF dosyalarını (1 GB ve üzeri) açmak, 2B/3B gezmek, düzenlemek ve farklı formatlarda kaydetmek için kurulum gerektirmeyen bir araç.
 
+Sürüm: **0.1.5**. Tüm sürüm notları uygulamada üst çubuktaki sürüm düğmesinde (Ayarlar'ın solunda) ve `js/changelog.js` dosyasında.
+
 ## Başlatma
 
 `DXF Okuyucu.html` dosyasına çift tıklayın. **Chrome veya Edge** önerilir.
@@ -29,6 +31,9 @@ Büyük DXF dosyalarını (1 GB ve üzeri) açmak, 2B/3B gezmek, düzenlemek ve 
 - Menüde yakalama hassasiyeti de piksel olarak ayarlanır.
 - Yakalanan noktada AutoCAD'deki gibi şekilli bir işaret ve tür etiketi ("Merkez" gibi) çıkar.
 - Daire ve yaylarda ekrandaki çokgenin köşeleri değil gerçek merkez ve çeyrek noktaları yakalanır.
+- **Merkez (AutoCAD gibi):** Dairenin, yayın ya da elipsin merkezi, imleç eğrinin üzerinde yaklaşık 0,4 saniye bekleyince yakalanabilir olur (merkezde soluk yeşil +). Böylece dairenin içinde çizerken imleç merkeze çekilmez.
+- Çizilmekte olan nesnenin önceki noktaları (ör. polyline'ın ilk noktası) da yakalanır.
+- **3B görünümde** de çalışır: noktalar ekrandan bulunur ve gerçek 3B koordinatıyla alınır.
 - **Kesinlik:** Yakalanan nokta nesnenin dosyadaki tam tanımından yeniden hesaplanır. Kesişimlerde iki nesnenin tam geometrisi kullanılır. Yani çizilen nesne kaynak koordinatı birebir alır; ekran hassasiyetinden kaynaklanan kayma olmaz.
 
 ### Hizalama: kutupsal izleme ve nesne yakalama izi (AutoCAD POLAR / OTRACK)
@@ -38,6 +43,19 @@ Büyük DXF dosyalarını (1 GB ve üzeri) açmak, 2B/3B gezmek, düzenlemek ve 
   - İmleç alınan noktaların yatay ve dikey hizalarına ve bu hizaların kesişimine oturur. Kutupsal açıksa tüm açı adımlarındaki hizalar da kullanılır.
   - Aynı noktada tekrar beklemek noktayı bırakır.
 - Hiza etkinken sayı yazmak, noktayı o yönde o uzaklığa koyar (doğrudan uzaklık girişi).
+- Çizilmekte olan nesnenin önceki noktaları kendiliğinden hizalanır (ör. dördüncü köşeyi ilk köşenin hizasına koymak için beklemeye gerek yok).
+
+### Dinamik giriş: uzunluk ve açı (AutoCAD DYNMODE)
+- Çizerken imlecin yanında iki alan görünür: önceki nokta varken **uzunluk** ve **açı** (X ekseninden saat yönü tersine), ilk noktada **X** ve **Y**.
+- Sayı yazmak etkin alana girer. **Tab** yazılan değeri kilitler (sarı, asma kilitli) ve diğer alana geçer. Kilitli uzunluk ya da açı imleci kısıtlar; diğer değer fareden gelir.
+- **Enter / boşluk** noktayı koyar. **Geri tuşu** karakter siler, boş alanda kilidi açar. **Esc** alanları temizler.
+- Yalnız sayı yazıp Enter'a basmak aracın kendi anlamını korur: dairede yarıçap, döndürmede açı, ölçeklemede çarpan.
+- `<` uzunluktan açıya geçer (`10<45`). Önceki nokta varken `,` yazmak metni komut satırına aktarır (`@dx,dy` ya da `x,y` için).
+- Ayarlar → "İmleçte uzunluk / açı" ile kapatılabilir.
+
+### Görünüm yardımcıları
+- Sol alt köşede eksen göstergesi (X kırmızı, Y yeşil, Z mavi); görünümle birlikte döner.
+- 0,0,0 noktası hafif eksen çizgileriyle gösterilir; 3B görünümde hafif bir zemin ızgarası vardır. İkisi de Ayarlar'dan kapatılabilir.
 
 ### Ayarlar (Ctrl+,)
 - **Görünüm:** tema, varsayılan görsel stil, ızgara, yazı sınırı
@@ -100,6 +118,11 @@ Tam liste programda **F1** ile açılır.
 
 Tüm düzenlemeler geri alınabilir (Ctrl+Z / Ctrl+Y).
 
+- **Nokta tutamaçları (grip):** Seçili nesnelerin (en çok 100) uç, köşe, orta, merkez, çeyrek ve ölçü noktalarında mavi kareler çıkar.
+  - Kareye tıklayın (kırmızı olur), yeni yere tıklayın; ya da basılı tutup sürükleyin. Yakalama, hizalama ve dinamik giriş bu sırada da çalışır. Esc / sağ tık vazgeçer.
+  - Uç / köşe / çeyrek / kontrol noktası: çizgiyi uzatır, polyline köşesini kaydırır, yarıçapı değiştirir. Polyline kenar ortası: kenarı öteler. Çizgi ortası, merkez, ekleme noktası: nesneyi taşır.
+  - Tutamaç karesi gizmonun üstünde çizilir ve tıklamayı alır; gizmo okunun geri kalanı gizmoya aittir.
+- **3B görünümde çizim:** Çizim araçları, Taşı / Kopyala, Mesafe ve Alan 3B görünümde de çalışır. Yakalanan nokta 3B koordinatıyla alınır; boşluğa tıklanınca nokta çalışma düzlemine (önceki noktanın kotu, yoksa Z = 0) düşer. 3B'de hizalama yoktur.
 - **Seçim:**
   - Tıklayarak ya da pencereyle seçilir.
   - Soldan sağa pencere: yalnız tamamen içindekiler. Sağdan sola pencere: kesişenler.
@@ -139,7 +162,9 @@ Tüm düzenlemeler geri alınabilir (Ctrl+Z / Ctrl+Y).
     - Doğrusal ölçü: İmlecin konumuna göre yatay ya da dikey olur; `Y`/`D` ile kilitlenir. İlk soruda Enter'a basılırsa nesne seçilir.
     - Hizalı, açı (iki çizgi ya da Enter ile 3 nokta), yarıçap ve çap ölçüleri de var.
     - Ölçüler AutoCAD'de düzenlenebilen gerçek DIMENSION nesneleri olarak kaydedilir.
-    - Yazı yüksekliği, ondalık basamak ve ayırıcı **Ölçü ayarları**ndan (`D`) değişir. Bu değerler her ölçüye AutoCAD stil geçersiz kılması olarak yazılır.
+    - **Ölçü ayarları** (`D`): yazı yüksekliği, ondalık basamak ve ayırıcı; uç tipi (dolu ok ya da inşaat projelerindeki **eğik çizgi**); ölçü çizgisi, uzatma çizgisi ve yazı renkleri ayrı ayrı. Pencerede canlı önizleme var; "tüm ölçülere uygula" ile programda çizilmiş ölçüler de güncellenir.
+    - Bu değerler her ölçüye AutoCAD stil geçersiz kılması (DIMCLRD, DIMCLRE, DIMCLRT, DIMTSZ…) olarak yazılır.
+    - Şeritteki Ölçü düğmesi son kullanılan ölçü aracını hatırlar.
   - AutoCAD'deki gibi çizgi aracı Enter'a kadar sürer; diğerleri tek nesneden sonra biter.
   - Kotlu bir noktaya yakalanırsanız yeni nesne o kotta oluşur.
 - **Değiştirme araçları:**
@@ -189,7 +214,7 @@ Bu bilgisayarda ölçülen süreler:
 - **Görünüm:**
   - Çizgi tipleri ve kalınlıkları gösterilmez.
   - Taramaların yalnız sınırları çizilir.
-- **Plan görünüme bağlı araçlar:** Çizim, değiştirme, ölçülendirme ve ölçüm araçları plan (üst) görünümde çalışır.
+- **Plan görünüme bağlı araçlar:** Değiştirme (döndür, ölçekle, ayna, buda, uzat, öteleme, kavis…), ölçülendirme ve metin araçları plan (üst) görünümde çalışır. Çizim araçları, Taşı / Kopyala, Mesafe ve Alan 3B'de de çalışır; polyline, dikdörtgen, daire gibi düzlemsel nesneler ilk noktanın kotunda yatay düzlemde oluşur.
   - 3B görünümde seçim, gizmo (X/Y/Z döndürme dahil), dönüşüm kartı, silme, renk ve katman işlemleri kullanılabilir.
 - **Budama, uzatma, öteleme, kavis, birleştirme ve patlatmanın desteklediği tipler:**
   - Tipler: çizgi, yay, daire, polyline (yaylı köşeler dahil).
@@ -234,7 +259,11 @@ js/export.js          DXF / SVG / PDF / PNG
 js/layers-ui.js       eklenti: katman paneli (renk, kilit, ad, sil)
 js/tracking.js        eklenti: kutupsal izleme ve nesne yakalama izi
 js/text-tool.js       eklenti: yerinde metin düzenleyici (TEXT / MTEXT), çift tıkla düzenleme
-js/dim.js             eklenti: ölçülendirme araçları ve ölçü ayarları
+js/dim.js             eklenti: ölçülendirme araçları ve ölçü ayarları (renkler, eğik çizgi uç tipi)
+js/dyn-input.js       eklenti: dinamik giriş (uzunluk / açı alanları, Tab ile kilit)
+js/grips.js           eklenti: nokta tutamaçlarıyla düzenleme
+js/view-aids.js       eklenti: eksen göstergesi, 0,0,0 işareti, 3B zemin ızgarası
+js/changelog.js       eklenti: sürüm notları (yeni sürümde en üste kayıt eklenir)
 js/app.js             arayüz, temel araçlar, komutlar
 tests/                Node ile test betikleri (tarayıcı gerekmez)
 ```
@@ -246,7 +275,7 @@ node tests/test_parse.js dosya.dxf                 # okuma hızı ve istatistik
 node tests/test_save.js girdi.dxf cikti.dxf        # düzenle → kaydet → yeniden oku
 node tests/test_xform.js girdi.dxf [klasör]        # öteleme/Z/döndürme/ölçek/ayna yamasının köşe köşe doğrulaması
 node tests/test_xform3d.js girdi.dxf [klasör]      # 3B döndürme, tek eksen ölçek ve aynalama yamasının doğrulaması
-node tests/test_dim.js cikti.dxf                   # 5 tür ölçü: üret → kaydet (*D blokları) → yeniden oku
+node tests/test_dim.js cikti.dxf                   # 5 tür ölçü + renkli / eğik çizgili ölçü: üret → kaydet (*D blokları) → yeniden oku
 node tests/test_geom.js                            # budama, uzatma, öteleme, kavis, Delaunay testleri
 python tests/gen_coverage.py kapsam.dxf            # tüm nesne tipleriyle örnek çizim (ezdxf gerekir)
 python tests/gen_big.py buyuk.dxf 1100             # ~1,1 GB sentetik test dosyası

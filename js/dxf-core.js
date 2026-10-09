@@ -1284,9 +1284,14 @@ function DXFCore() {
           else if (DIM) {
             const dd = dimDefOfE(E); if (!dd) break;
             const G = DIM.geom(dd); B.cz = dd.z || 0;
-            for (const q of G.segs) B.seg(q[0], q[1], q[2], q[3]);
+            // DIMCLRD / DIMCLRE / DIMCLRT: 0 bloğa (varlığa) göre, 256 katmana göre
+            const own = B.cCol, L = B.layers[B.cLi], rc = (aci) => !aci ? own : aci === 256 ? (L ? L.rgba : own) : aciToRgba(aci);
+            const cd = rc(dd.clrd), ce = rc(dd.clre), ct = rc(dd.clrt);
+            for (const q of G.segs) { B.cCol = q[4] === 'e' ? ce : cd; B.seg(q[0], q[1], q[2], q[3]); }
+            B.cCol = cd;
             for (const q of G.tris) { B.tri(q[0], q[1], B.cz, q[2], q[3], B.cz, q[4], q[5], B.cz); B.seg(q[0], q[1], q[2], q[3]); B.seg(q[2], q[3], q[4], q[5]); B.seg(q[4], q[5], q[0], q[1]); }
-            for (const t of G.texts) B.text(t.x, t.y, t.h, t.rot * DEG, 1 + 4 * 2, decodeDxfString(t.str), 1);
+            B.cCol = own;
+            for (const t of G.texts) B.text(t.x, t.y, t.h, t.rot * DEG, 1 + 4 * 2, decodeDxfString(t.str), 1, ct);
           }
           break;
         }
@@ -2344,9 +2349,12 @@ function DXFCore() {
     const dimParts = (d, owner, inModel) => {
       const G = DIM.geom(d), out = [], zz = d.z || 0, c2 = { eol, version: msg.version || 'AC1009', owner, alloc: ctx.alloc };
       const base = inModel ? { layer: d.layer, aci: d.aci } : { layer: '0', aci: 0 };
-      for (const q of G.segs) out.push(genEntity(Object.assign({ type: 'LINE', x1: q[0], y1: q[1], z1: zz, x2: q[2], y2: q[3], z2: zz }, base), c2));
-      for (const q of G.tris) out.push(genEntity(Object.assign({ type: 'SOLID', z: zz, pts: [[q[0], q[1]], [q[2], q[3]], [q[4], q[5]]] }, base), c2));
-      for (const t of G.texts) out.push(genEntity(Object.assign({ type: 'TEXT', x: t.x, y: t.y, z: zz, h: t.h, rot: t.rot, str: t.str, ha: 1, va: 2 }, base), c2));
+      // bileşen renkleri (DIMCLRD/E/T); 0 = bloğa göre (modelde: ölçünün rengi)
+      const role = (aci) => aci ? Object.assign({}, base, { aci }) : base;
+      const bd = role(d.clrd), be = role(d.clre), bt = role(d.clrt);
+      for (const q of G.segs) out.push(genEntity(Object.assign({ type: 'LINE', x1: q[0], y1: q[1], z1: zz, x2: q[2], y2: q[3], z2: zz }, q[4] === 'e' ? be : bd), c2));
+      for (const q of G.tris) out.push(genEntity(Object.assign({ type: 'SOLID', z: zz, pts: [[q[0], q[1]], [q[2], q[3]], [q[4], q[5]]] }, bd), c2));
+      for (const t of G.texts) out.push(genEntity(Object.assign({ type: 'TEXT', x: t.x, y: t.y, z: zz, h: t.h, rot: t.rot, str: t.str, ha: 1, va: 2 }, bt), c2));
       return out.join('');
     };
     const finishDim = (txt) => {

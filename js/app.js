@@ -17,6 +17,9 @@ const VIEWS = {
 // Plan görünüm gerektiren araçlar (nokta girişi / çizim / değiştirme / ölçüm)
 const DRAW_TOOLS = ['line', 'pline', 'spline', 'rect', 'polygon', 'circle', 'circle3', 'arc', 'ellipse', 'point', 'text'];
 const PLAN_TOOLS = new Set(DRAW_TOOLS.concat(['move', 'copy', 'rotate', 'scale', 'mirror', 'offset', 'trim', 'extend', 'fillet', 'chamfer', 'break', 'measure', 'area']));
+// 3B görünümde de çalışan araçlar: nokta yakalama ile 3B noktalar, boşlukta çalışma düzlemi (Z = başlangıç noktasının kotu)
+const TOOLS_3D = new Set(['line', 'pline', 'spline', 'rect', 'polygon', 'circle', 'circle3', 'arc', 'ellipse', 'point', 'move', 'copy', 'measure', 'area', 'grip']);
+const planOnly = (name) => PLAN_TOOLS.has(name) && !TOOLS_3D.has(name);
 const TOOL_ICON = { line: 'line', pline: 'pline', spline: 'spline', rect: 'rect', polygon: 'polygon', circle: 'circle', circle3: 'circle', arc: 'arc', ellipse: 'ellipse', point: 'point', text: 'text' };
 // Komut tablosu: [kısaltmalar, tür ('t' araç, 'c' komut), ad, açıklama, grup]
 const COMMANDS = [
@@ -83,7 +86,8 @@ const SNAP_MODES = [['end', 'Uç nokta', '□'], ['mid', 'Orta nokta', '△'], [
   ['perp', 'Dik', '⊥'], ['near', 'En yakın', '⧗'], ['node', 'Düğüm (nokta nesnesi)', '⊗'], ['ins', 'Ekleme noktası (blok, yazı)', '⊡']];
 const SNAP_NAME = Object.fromEntries(SNAP_MODES.map(m => [m[0], m[1]]));
 const DEFAULT_SNAP = { end: true, mid: true, cen: true, quad: false, int: true, perp: false, near: false, node: true, ins: true };
-const DEFAULT_SETTINGS = { theme: 'dark', grid: true, aperture: 12, snapLabels: true, snap: DEFAULT_SNAP, gizmo: true, dynInput: true, wheelInvert: false, zoomSpeed: 1, textLimit: 25000, newUnits: 6, style: 'wire', otrack: true, polar: true, polarInc: 90 };
+const DEFAULT_SETTINGS = { theme: 'dark', grid: true, aperture: 12, snapLabels: true, snap: DEFAULT_SNAP, gizmo: true, dynInput: true, wheelInvert: false, zoomSpeed: 1, textLimit: 25000, newUnits: 6, style: 'wire', otrack: true, polar: true, polarInc: 90,
+  dynFields: true, grips: true, originMark: true, axisTripod: true };
 function loadSettings() {
   let o = {}; try { o = JSON.parse(localStorage.getItem('fastdxf.settings') || '{}') || {}; } catch (e) { o = {}; }
   const st = Object.assign({}, DEFAULT_SETTINGS, o); st.snap = Object.assign({}, DEFAULT_SNAP, o.snap || {});
@@ -95,7 +99,9 @@ class App {
   constructor() {
     this.core = DXFCore();
     // eklenti kancaları: snap() yakalamadan sonra · point(p, base) → nokta ya da null · preview(ctx) · distance(L, base) → nokta ya da null · tool(name) araç değişince
-    this.hooks = { snap: [], point: [], preview: [], distance: [], tool: [] };
+    // under(ctx) ızgaranın hemen üstüne (araç önizlemesinin altına) çizer
+    this.hooks = { snap: [], point: [], preview: [], distance: [], tool: [], under: [] };
+    this.cenArmed = new Map();   // üzerinde beklenmiş daire/yay/elips → merkez (merkez yakalama yalnız bunlarda)
     this.store = new Store(this.core);
     try { this.R = new Renderer($('gl'), $('ov'), this.store); }
     catch (e) { document.body.innerHTML = '<div style="padding:40px;font:16px sans-serif;color:#ddd">' + esc(e.message) + '</div>'; throw e; }
@@ -420,7 +426,9 @@ class App {
 
   // ───────────── seçim / düzenleme yardımcıları
   selChanged() { this.gizmo.invalidate(); this.R.hl.dirty = true; this.R.request(); this.renderProps(); this.updateButtons(); }
-  onEdited() { this.defCache.clear(); this.gizmo.invalidate(); this.renderLayers(); this.renderProps(); this.updateButtons(); this.updateDoc(); }
+  // yeni / değişen nesneler kapsamı değiştirir: sığdırma ve 3B odak öncesi yeniden hesaplanır
+  freshExtents() { const S = this.store; if (S.extDirty && S.done) { S.computeExtents(); S.extDirty = false; } }
+  onEdited() { this.store.extDirty = true; this.defCache.clear(); this.gizmo.invalidate(); this.renderLayers(); this.renderProps(); this.updateButtons(); this.updateDoc(); }
   ready() { if (!this.store.done) { this.toast('Dosya henüz okunuyor, lütfen bekleyin.'); return false; } return true; }
   deleteSel() { if (!this.ready()) return; const ids = this.store.selList.slice(); if (!ids.length) { this.toast('Silinecek nesne seçili değil.'); return; } this.editor.remove(ids); this.selChanged(); }
   zoomSel() {
@@ -459,6 +467,7 @@ class App {
 
   // ───────────── 3B görünüm
   focus() {
+    this.freshExtents();
     const S = this.store, ext = S.ext;
     let bb = this.R.viewBox();
     if (ext) bb = [Math.max(bb[0], ext[0]), Math.max(bb[1], ext[1]), Math.min(bb[2], ext[2]), Math.min(bb[3], ext[3])];
@@ -476,7 +485,7 @@ class App {
     this.vcLoop();
   }
   setNamedView(k) { const v = VIEWS[k]; if (v) { this.setView(v[0], v[1]); this.toast(v[2] + ' görünüm'); } }
-  homeView() { const S = this.store; this.setView(-135, ISO, (S.view0 || S.ext || [-50, -50, 50, 50]).slice(), S.zview); }
+  homeView() { this.freshExtents(); const S = this.store; this.setView(-135, ISO, (S.view0 || S.ext || [-50, -50, 50, 50]).slice(), S.zview); }
   vcLoop() { const f = () => { this.vc.draw(); if (this.R.anim) requestAnimationFrame(f); }; requestAnimationFrame(f); }
   beginOrbit() {
     const R = this.R;
@@ -521,7 +530,7 @@ class App {
     if (say) this.toast(on ? 'Blok sembolleri ekleme kotunda düz çiziliyor' : 'Blok sembolleri dosyadaki iç kotlarıyla çiziliyor');
   }
   viewChanged() {
-    if (!this.R.is2D && PLAN_TOOLS.has(this.toolName)) this.setTool('select');
+    if (!this.R.is2D && planOnly(this.toolName)) this.setTool('select');
     this.snapPt = null; this.update3DUI(); this.updatePrompt(); this.R.request();
   }
   update3DUI() {
@@ -665,21 +674,56 @@ class App {
   abs(x, y) { const o = this.store.info ? this.store.info.origin : [0, 0]; return [x + o[0], y + o[1]]; }
   absP(p) { return p && p.abs ? p.abs.slice() : this.abs(p[0], p[1]); }
   rel(x, y) { const o = this.store.info ? this.store.info.origin : [0, 0]; return [x - o[0], y - o[1]]; }
-  // İmlecin dünya noktası (yakalama + orto uygulanmış); yakalanan noktada Z de döner
+  // İmlecin dünya noktası (yakalama + hiza + orto + dinamik giriş kilitleri uygulanmış); yakalanan noktada Z de döner
   point(base) {
+    const p = this.rawPoint(base);
+    if (this.dyn) { const q = this.dyn.constrain(p, base || this.toolBase()); if (q) return q; }
+    return p;
+  }
+  rawPoint(base) {
     let p = [this.mouse.wx, this.mouse.wy];
     if (this.snapPt) { p = this.snapPt.p.slice(); if (this.snapPt.abs) p.abs = this.snapPt.abs; return p; }
+    if (!this.R.is2D) {
+      // 3B: imleç ışınının çalışma düzlemiyle (Z = önceki noktanın kotu, yoksa 0) kesişimi
+      const b = base || this.toolBase(), z = b && b[2] !== undefined ? b[2] : 0, q = this.R.ray(this.mouse.sx, this.mouse.sy, z);
+      this.R.drawZ = z;
+      return q ? [q[0], q[1], z] : [p[0], p[1], z];
+    }
     for (const h of this.hooks.point) { const q = h(p, base); if (q) return q; }
     if (this.ortho && base) { if (Math.abs(p[0] - base[0]) > Math.abs(p[1] - base[1])) p[1] = base[1]; else p[0] = base[0]; }
     return p;
   }
+  // çizilmekte olan nesnenin girilmiş noktaları (son nokta = taban hariç): yakalanır ve hizalanır
+  toolPts() {
+    const t = this.tool; if (!t || !t.wantsPoints) return [];
+    const P = Array.isArray(t.pts) ? t.pts : Array.isArray(t.P) ? t.P : null;
+    return P && P.length > 1 ? P.slice(0, -1).filter(q => q && isFinite(q[0])) : [];
+  }
   updateSnap() {
     this.snapPt = null;
     const t = this.tool;
-    if (!this.snapOn || !t || !t.wantsPoints || !this.store.grid || !this.R.is2D) return;
-    this.snapPt = this.store.snap(this.mouse.wx, this.mouse.wy, (this.settings.aperture || 12) / this.R.scale, this.snapModes, this.toolBase());
+    if (!this.snapOn || !t || !t.wantsPoints || !this.store.grid) return;
+    const ap = this.settings.aperture || 12, extra = { armed: this.cenArmed, curves: [], toolPts: this.toolPts() };
+    if (this.R.is2D) this.snapPt = this.store.snap(this.mouse.wx, this.mouse.wy, ap / this.R.scale, this.snapModes, this.toolBase(), extra);
+    else this.snapPt = this.store.snapScreen(this.mouse.sx, this.mouse.sy, ap, this.snapModes, this.R.cam(), this.R.ray3(this.mouse.sx, this.mouse.sy), ap * (this.R.persp ? 4 : 1.5) / this.R.scale, extra);
     if (this.snapPt) this.refineSnap(this.snapPt);
+    this.armCurves(extra.curves);
     for (const h of this.hooks.snap) h();
+  }
+  // Daire/yay/elips üzerinde ~0,4 sn beklenince merkezi yakalanabilir olur (AutoCAD gibi); en çok 4 eğri hatırlanır
+  armCurves(curves) {
+    if (!this.snapModes.cen || !curves.length) { this._arm = null; return; }
+    curves.sort((a, b) => a.d - b.d);
+    const c = curves[0];
+    if (this.cenArmed.has(c.id)) { this._arm = null; return; }
+    if (this._arm && this._arm.id === c.id) return;
+    clearTimeout(this._armT);
+    const me = this._arm = { id: c.id, c: c.c };
+    this._armT = setTimeout(() => {
+      if (this._arm !== me) return;
+      this.cenArmed.set(me.id, me.c); if (this.cenArmed.size > 4) this.cenArmed.delete(this.cenArmed.keys().next().value);
+      this._arm = null; this.updateSnap(); this.showCoords(); this.R.request();
+    }, 380);
   }
   // Ekrandaki (float32, parçalı) geometriden bulunan yakalama noktasını nesnenin DXF'teki tam tanımından yeniden hesapla.
   // Tanım ilk seferde arka planda okunur; geldiğinde nokta güncellenir (tıklamadan önce hazır olur).
@@ -732,7 +776,9 @@ class App {
       }
     }
     let best = null, bd = Infinity;
-    for (const c of cands) { const dd = Math.hypot(c[0] - ax, c[1] - ay); if (dd < bd) { bd = dd; best = c; } }
+    // aynı X/Y'deki adaylar (ör. düşey çizginin iki ucu) kotla ayrılır
+    const az = sp.p[2];
+    for (const c of cands) { const dd = Math.hypot(c[0] - ax, c[1] - ay, c[2] !== null && c[2] !== undefined && isFinite(az) ? c[2] - az : 0); if (dd < bd) { bd = dd; best = c; } }
     const lim = 2 * (this.settings.aperture || 12) / this.R.scale;
     if (!best || bd > lim) return;
     const r = this.rel(best[0], best[1]);
@@ -741,6 +787,11 @@ class App {
   }
   // aracın son girilen noktası (dik yakalama ve orto için)
   toolBase() { const t = this.tool; if (!t) return null; return t.base || (t.pts && t.pts[t.pts.length - 1]) || t.c || t.a || (t.P && t.P[t.P.length - 1]) || null; }
+  // Klavyeyle girilen noktayı tıklama gibi uygula (dinamik giriş)
+  commitPoint(p) {
+    const t = this.tool; if (!t || !t.click) return;
+    Promise.resolve(t.click(p)).then(() => { this.updatePrompt(); this.updateSnap(); this.R.request(); });
+  }
   // "x,y[,z]" mutlak · "@dx,dy" göreli · "@uzunluk<açı" · tek sayı: imleç yönünde uzunluk
   parsePoint(s, base) {
     s = s.trim().replace(/\s+/g, '');
@@ -772,9 +823,9 @@ class App {
     const strokePts = (ctx, P, closed, color, dash) => {
       if (P.length < 2) return;
       ctx.strokeStyle = color || '#4c9aff'; if (dash) ctx.setLineDash(dash);
-      ctx.beginPath(); P.forEach((q, i) => { const s = R.w2s(q[0], q[1]); i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]); }); if (closed) ctx.closePath(); ctx.stroke(); ctx.setLineDash([]);
+      ctx.beginPath(); P.forEach((q, i) => { const s = R.w2s(q[0], q[1], q[2]); i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]); }); if (closed) ctx.closePath(); ctx.stroke(); ctx.setLineDash([]);
     };
-    const label = (ctx, txt, p) => { const s = R.w2s(p[0], p[1]); ctx.font = '12px Segoe UI, sans-serif'; ctx.fillStyle = '#ffd166'; ctx.textAlign = 'center'; ctx.fillText(txt, s[0], s[1] - 8); };
+    const label = (ctx, txt, p) => { const s = R.w2s(p[0], p[1], p[2]); ctx.font = '12px Segoe UI, sans-serif'; ctx.fillStyle = '#ffd166'; ctx.textAlign = 'center'; ctx.fillText(txt, s[0], s[1] - 8); };
     const circ = (c, r, n) => { const P = []; for (let i = 0; i <= (n || 72); i++) { const a = i / (n || 72) * 2 * Math.PI; P.push([c[0] + r * Math.cos(a), c[1] + r * Math.sin(a)]); } return P; };
     const pickEnt = (p) => S.grid ? S.pick(p[0], p[1], 8 / R.scale) : -1;
     const selTool = (name, mk) => Object.assign({ wantsPoints: true, start() { if (!app.ready() || !app.needSel(app.toolName)) return false; if (this.init) this.init(); } }, mk);
@@ -842,7 +893,7 @@ class App {
           this.base = p;
         },
         input(s) { const p = app.parsePoint(s, this.base); if (!p) return false; this.click(p); return true; },
-        preview(ctx) { if (this.base) { app.rubber(ctx, this.base, app.point(this.base)); const c = app.point(this.base); label(ctx, fmtC(Math.hypot(c[0] - this.base[0], c[1] - this.base[1])), [(c[0] + this.base[0]) / 2, (c[1] + this.base[1]) / 2]); } }
+        preview(ctx) { if (this.base) { app.rubber(ctx, this.base, app.point(this.base)); const c = app.point(this.base); const b = this.base, dz = (c[2] || 0) - (b[2] || 0), L = Math.hypot(c[0] - b[0], c[1] - b[1], R.is2D ? 0 : dz); label(ctx, fmtC(L), [(c[0] + b[0]) / 2, (c[1] + b[1]) / 2, ((c[2] || 0) + (b[2] || 0)) / 2]); } }
       },
       pline: {
         wantsPoints: true, pts: [],
@@ -1210,7 +1261,7 @@ class App {
         preview(ctx) {
           const P = this.pts.length ? this.pts.concat([app.point(this.pts[this.pts.length - 1])]) : this.done;
           if (!P || P.length < 2) return;
-          ctx.beginPath(); P.forEach((q, i) => { const [x, y] = R.w2s(q[0], q[1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.closePath();
+          ctx.beginPath(); P.forEach((q, i) => { const [x, y] = R.w2s(q[0], q[1], q[2]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.closePath();
           ctx.fillStyle = 'rgba(255,209,102,.18)'; ctx.fill(); ctx.strokeStyle = '#ffd166'; ctx.stroke();
           if (P.length >= 3) {
             let cx = 0, cy = 0; for (const q of P) { cx += q[0]; cy += q[1]; }
@@ -1224,13 +1275,14 @@ class App {
   }
   setTool(name) {
     const t = this.tools[name]; if (!t) return;
-    if (PLAN_TOOLS.has(name) && !this.R.is2D) {
-      this.toast('Bu araç plan (üst) görünümde çalışır. ViewCube\'da ÜST\'e tıklayın ya da "plan" yazın.', 4500);
+    if (planOnly(name) && !this.R.is2D) {
+      this.toast('Bu araç plan (üst) görünümde çalışır. ViewCube\'da ÜST\'e tıklayın ya da "plan" yazın. (Çizim araçları, Taşı/Kopyala ve ölçüm 3B\'de de çalışır.)', 4500);
       if (this.toolName) return; name = 'select';
     }
     if (this.tool && this.tool.cancel) this.tool.cancel();
     this.gizmo.cancel();
     this.tool = this.tools[name]; this.toolName = name;
+    this.cenArmed.clear(); this._arm = null; this.R.drawZ = undefined;
     for (const h of this.hooks.tool) h(name);
     if (PLAN_TOOLS.has(name) && name !== 'measure' && name !== 'area') { if (!this.store.done && this.store.file) { this.toast('Dosya okunurken düzenleme yapılamaz.'); return this.setTool('select'); } }
     if (this.tool.start && this.tool.start() === false) { this.tool = this.tools.select; this.toolName = 'select'; }
@@ -1248,7 +1300,7 @@ class App {
   }
   updatePrompt() { const t = this.tool; this.prompt(t ? (typeof t.prompt === 'function' ? t.prompt() : t.prompt) : ''); }
   rubber(ctx, a, b) {
-    const [x1, y1] = this.R.w2s(a[0], a[1]), [x2, y2] = this.R.w2s(b[0], b[1]);
+    const [x1, y1] = this.R.w2s(a[0], a[1], a[2]), [x2, y2] = this.R.w2s(b[0], b[1], b[2]);
     ctx.strokeStyle = '#4c9aff'; ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); ctx.setLineDash([]);
   }
   // tanımı (mutlak) ekrana çiz (önizleme)
@@ -1381,7 +1433,7 @@ class App {
     }
   }
   drawSnapMarker(ctx, sp) {
-    const [x, y] = this.R.w2s(sp.p[0], sp.p[1]), k = sp.kind, r = 7;
+    const [x, y] = this.R.w2s(sp.p[0], sp.p[1], sp.p[2]), k = sp.kind, r = 7;
     ctx.save(); ctx.lineWidth = 2; ctx.strokeStyle = '#3fe07a'; ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 3;
     ctx.beginPath();
     if (k === 'end') ctx.rect(x - r, y - r, 2 * r, 2 * r);
@@ -1404,7 +1456,15 @@ class App {
   }
   drawPreview(ctx) {
     this.drawGrid(ctx);
+    for (const h of this.hooks.under) h(ctx);
+    // merkezi yakalanabilir eğriler: merkezde soluk artı
+    if (this.cenArmed.size && this.tool && this.tool.wantsPoints) {
+      ctx.save(); ctx.strokeStyle = 'rgba(63,224,122,.75)'; ctx.lineWidth = 1;
+      for (const c of this.cenArmed.values()) { const [x, y] = this.R.w2s(c[0], c[1], c[2]); if (!isFinite(x)) continue; ctx.beginPath(); ctx.moveTo(x - 6, y); ctx.lineTo(x + 6, y); ctx.moveTo(x, y - 6); ctx.lineTo(x, y + 6); ctx.stroke(); }
+      ctx.restore();
+    }
     if (this.tool && this.tool.preview) this.tool.preview(ctx);
+    this.gizmo.draw(ctx);
     for (const h of this.hooks.preview) h(ctx);
     if (this.snapPt) this.drawSnapMarker(ctx, this.snapPt);
     if (this.marker) {
@@ -1415,7 +1475,6 @@ class App {
         ctx.font = '12px Segoe UI, sans-serif'; ctx.fillStyle = '#e5534b'; ctx.textAlign = 'left'; ctx.fillText(m.label, x + 16, y - 14);
       }
     }
-    this.gizmo.draw(ctx);
   }
   afterDraw() {
     const st = this.R.lastTextStats, w = $('textwarn');
@@ -1535,7 +1594,9 @@ class App {
     const mouse = [['Sol tık / sürükle', 'Seç · pencere (sağa: tamamen içindeki, sola: kesişen) · Shift: ekle/çıkar'], ['Tekerlek', 'İmlecin olduğu yere yakınlaş'], ['Orta / sağ tuş sürükle', 'Kaydır'],
       ['Shift + orta tuş', '3B yörünge'], ['Orta tuş çift tık', 'Çizime sığdır'], ['Seçim tutamacı', 'Oklar: X/Y/Z yönünde taşı · halka: döndür · kareler: ölçekle (Shift: adımlı)'],
       ['ViewCube', 'Yüz/kenar/köşe: hazır görünüm · sürükle: döndür · ⌂: ev'], ['Enter / boşluk / sağ tık', 'Komutu bitir · boş satırda son komutu tekrarla'], ['Esc', 'İptal / seçimi bırak'],
-      ['Delete', 'Seçileni sil'], ['Ctrl+Z / Ctrl+Y', 'Geri al / yinele'], ['Ctrl+A / Ctrl+F', 'Hepsini seç / metin bul'], ['F3 / F8', 'Yakalama / orto'], ['Ctrl+O / Ctrl+S', 'Aç / kaydet']];
+      ['Delete', 'Seçileni sil'], ['Ctrl+Z / Ctrl+Y', 'Geri al / yinele'], ['Ctrl+A / Ctrl+F', 'Hepsini seç / metin bul'], ['F3 / F8', 'Yakalama / orto'], ['F10', 'Kutupsal izleme'], ['Ctrl+O / Ctrl+S', 'Aç / kaydet'],
+      ['Sayı + Tab', 'Çizerken: uzunluğu (ya da açıyı) kilitle, diğer alana geç · Enter: noktayı koy'], ['Mavi tutamaç', 'Seçili nesnenin noktasına tıklayın, yeni yere tıklayın (uzat / taşı)'],
+      ['Daire üzerinde bekle', 'Merkez yakalaması etkinleşir']];
     this.modal('<h2>Komutlar ve kısayollar</h2><div style="display:grid;grid-template-columns:1fr 1fr;gap:0 28px;max-width:860px"><div><h4>Fare ve klavye</h4><table class="help">' + mouse.map(r => '<tr><td><kbd>' + r[0] + '</kbd></td><td>' + r[1] + '</td></tr>').join('') + '</table>' +
       '<h4>Değer girişi</h4><div style="color:var(--muted);font-size:12px">x,y[,z] mutlak · @dx,dy göreli · @uzunluk&lt;açı kutupsal · tek sayı: imleç yönünde uzunluk, yarıçap, açı ya da çarpan.<br>Harf yazınca komut satırına gider; AutoCAD kısaltmaları geçerlidir.</div></div><div>' + cmds + '</div></div>' +
       '<div class="btns"><button class="btn pri" id="mOk">Kapat</button></div>', d => d.querySelector('#mOk').onclick = () => this.closeModal());
@@ -1703,7 +1764,9 @@ class App {
       '<h4>Görünüm</h4>' +
       row('Tema', 'Çizim alanı ve arayüz arka planı', sel('theme', [['dark', 'Koyu'], ['light', 'Açık']])) +
       row('Varsayılan görsel stil', 'Dosya açılınca', sel('style', [['wire', 'Tel kafes'], ['hidden', 'Gizli çizgi'], ['shaded', 'Gölgeli']])) +
-      row('Izgara', 'Plan görünümde uyarlanır ızgara', sw('grid', st.grid)) +
+      row('Izgara', 'Plan ve 3B görünümde uyarlanır ızgara', sw('grid', st.grid)) +
+      row('Başlangıç noktası', '0,0,0 noktasını eksen çizgileriyle hafifçe göster', sw('originMark', st.originMark)) +
+      row('Eksen göstergesi', 'Sol alt köşede X / Y / Z yönleri (3ds Max gibi)', sw('axisTripod', st.axisTripod)) +
       row('Yazı sınırı', 'Uzaktan bakarken aynı anda çizilen en çok yazı', sel('textLimit', [[5000, '5.000'], [25000, '25.000'], [100000, '100.000'], [1000000, 'Sınırsız']])) +
       '<h4>Nesne yakalama</h4>' +
       row('Hassasiyet', 'İmlecin yakalama yarıçapı', rng('aperture', 4, 30, 1, fmts.aperture)) +
@@ -1712,6 +1775,8 @@ class App {
       '<h4>Düzenleme</h4>' +
       row('Seçim tutamacı', 'Seçimde X/Y/Z taşı · döndür · ölçekle tutamacı', sw('gizmo', st.gizmo)) +
       row('Dinamik komut girişi', 'Çizim alanında harf yazınca komut satırına gider (AutoCAD gibi)', sw('dynInput', st.dynInput)) +
+      row('İmleçte uzunluk / açı', 'Sayı yazınca imlecin yanındaki alana girer; Tab: alan değiştir ve değeri kilitle', sw('dynFields', st.dynFields)) +
+      row('Nokta tutamaçları', 'Seçili nesnelerin uç / orta / merkez noktalarından düzenleme', sw('grips', st.grips)) +
       '<h4>Fare</h4>' +
       row('Tekerlek yönü', 'Yakınlaştırma yönünü ters çevir', sw('wheelInvert', st.wheelInvert)) +
       row('Yakınlaştırma hızı', '', rng('zoomSpeed', 0.3, 3, 0.1, fmts.zoomSpeed)) +
@@ -1780,12 +1845,18 @@ class App {
       this._lastDown = isDbl ? null : { t: now, x: e.offsetX, y: e.offsetY };
       if (isDbl && this.tool.dbl && this.toolName === 'select') { this.tool.dbl(); this.updatePrompt(); R.request(); return; }
       // seçim tutamacı
-      if (this.toolName === 'select') { const h = this.gizmo.hit(e.offsetX, e.offsetY); if (h && this.gizmo.begin(h, e)) { R.request(); return; } }
+      // nokta tutamaçları (grip) gizmonun üstünde çizilir: karenin içine tıklanırsa tutamaç, değilse gizmo
+      if (this.toolName === 'select') {
+        if (this.grips && this.grips.down(e)) { R.request(); return; }
+        const h = this.gizmo.hit(e.offsetX, e.offsetY); if (h && this.gizmo.begin(h, e)) { R.request(); return; }
+      }
       const t = this.tool;
       if (t.down) t.down(this.point(), e);
       else if (t.click) {
         const base = t.base || (t.pts && t.pts[t.pts.length - 1]) || t.c || t.a || (t.P && t.P[t.P.length - 1]);
-        Promise.resolve(t.click(this.point(base))).then(() => { if (isDbl && t.dbl && this.tool === t) t.dbl(); this.updatePrompt(); R.request(); });
+        const pt = this.point(base);
+        if (this.dyn) this.dyn.reset();
+        Promise.resolve(t.click(pt)).then(() => { if (isDbl && t.dbl && this.tool === t) t.dbl(); this.updatePrompt(); this.updateSnap(); R.request(); });
       }
     });
     ov.addEventListener('pointermove', (e) => {
@@ -1800,9 +1871,10 @@ class App {
       }
       this.track(e);
       if (this.gizmo.drag) { this.gizmo.move(e, e.shiftKey); return; }
-      if (this.toolName === 'select' && this.gizmo.active && !(this.tool.drag)) {
-        const h = this.gizmo.hit(e.offsetX, e.offsetY);
-        if (h !== this.gizmo.hover) { this.gizmo.hover = h; ov.style.cursor = h ? 'pointer' : 'crosshair'; R.request(); }
+      if (this.toolName === 'select' && !this.tool.drag) {
+        const gh = this.grips ? this.grips.hover(e) : false;
+        const h = !gh && this.gizmo.active ? this.gizmo.hit(e.offsetX, e.offsetY) : null;
+        if (h !== this.gizmo.hover) { this.gizmo.hover = h; if (!gh) ov.style.cursor = h ? 'pointer' : 'crosshair'; R.request(); }
       }
       this.updateSnap(); this.showCoords();
       if (this.tool.move) this.tool.move(e);
@@ -1876,6 +1948,8 @@ class App {
       if (ctrl && k.toLowerCase() === 'n') { e.preventDefault(); this.newDrawing(); return; }
       if (ctrl && k === ',') { e.preventDefault(); this.settingsDialog(); return; }
       if (ctrl || e.altKey) return;
+      // dinamik giriş (uzunluk / açı alanları, Tab ile kilit)
+      if (this.dyn && this.dyn.key(e)) { e.preventDefault(); R.request(); return; }
       if (k === 'Escape') { if (this.gizmo.drag) { this.gizmo.cancel(); return; } this.escape(); return; }
       if (k === 'Backspace' && this.tool.undoPt) { e.preventDefault(); this.tool.undoPt(); this.updatePrompt(); R.request(); return; }
       if (k === 'Delete') { e.preventDefault(); this.deleteSel(); return; }
@@ -1903,6 +1977,7 @@ class App {
     $('coords').textContent = 'X: ' + fmtC(ax) + '   Y: ' + fmtC(ay) + (R.is2D ? '' : '   Z: ' + fmtC(R.cz));
   }
   fit() {
+    this.freshExtents();
     const S = this.store, R = this.R;
     if (!S.ext) { if (S.view0) R.fit(S.view0); return; }
     const now = performance.now();

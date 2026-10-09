@@ -9,7 +9,34 @@ class DimTools {
     const st = this.app.settings;
     let h = st.dimH > 0 ? st.dimH : 0;
     if (!h) { const v = 14 / this.R.scale, p = Math.pow(10, Math.floor(Math.log10(v))), m = v / p; h = (m < 1.5 ? 1 : m < 2.2 ? 2 : m < 3 ? 2.5 : m < 7 ? 5 : 10) * p; }
-    return { h, dec: st.dimDec !== undefined ? st.dimDec : 2, sep: st.dimSep || ',' };
+    const tick = st.dimTick === true;
+    // eğik çizgi (inşaat): çizgi iz düşümleri yazı yüksekliği kadar, ölçü çizgisi uzatma çizgilerini yarım yükseklik aşar
+    return { h, dec: st.dimDec !== undefined ? st.dimDec : 2, sep: st.dimSep || ',', tsz: tick ? h : 0, dle: tick ? h * 0.5 : 0,
+      clrd: st.dimClrD | 0, clre: st.dimClrE | 0, clrt: st.dimClrT | 0 };
+  }
+  // önizleme rengi: 0 (bloğa göre) → araç mavisi, 256 → aktif katman rengi
+  css(aci) {
+    const app = this.app, S = app.store;
+    if (!aci) return '#4c9aff';
+    if (aci === 256) { const L = S.layers[app.curLayer]; return L ? this.R.colorCss(L.rgba) : '#4c9aff'; }
+    return this.R.colorCss(app.core.ACI[aci]);
+  }
+  // programda çizilmiş (yeni) tüm ölçüleri geçerli ayarlarla yeniden üret; dönüş: güncellenen sayı
+  async restyleAll() {
+    const app = this.app, S = app.store, E = S.E, TN = app.core.TYPE_NAMES, st = this.style(), ids = [], defs = [];
+    for (let id = 0; id < S.nEnt; id++) {
+      if ((E.flags.a[id] & F_DEL) || !(E.flags.a[id] & F_NEW) || TN[E.type.a[id]] !== 'DIMENSION') continue;
+      const d = await app.getDef(id); if (!d || !d.kind) continue;
+      // yazı yüksekliği otomatikse ölçünün kendi yüksekliği korunur
+      const keepH = !(app.settings.dimH > 0), s2 = Object.assign({}, st);
+      if (keepH) { s2.h = d.h; if (s2.tsz) s2.tsz = d.h; if (s2.dle) s2.dle = d.h * 0.5; }
+      delete d.block; delete d.asz; delete d.exo; delete d.exe; delete d.gap;
+      ids.push(id); defs.push(Object.assign(d, s2));
+    }
+    if (!ids.length) return 0;
+    const nids = app.editor.replace(ids, defs, ids.length + ' ölçünün stili güncellendi');
+    if (S.selList.length) { S.clearSel(); app.selChanged(); }
+    return nids.length;
   }
   // göreli tanım (önizleme) → mutlak tanım (kayıt)
   absDef(d) {
@@ -24,15 +51,19 @@ class DimTools {
   }
   // önizleme (göreli koordinat)
   draw(ctx, d) {
-    const R = this.R, G = this.D.geom(Object.assign({}, d, this.style()));
-    ctx.save(); ctx.strokeStyle = '#4c9aff'; ctx.fillStyle = '#4c9aff'; ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (const q of G.segs) { const a = R.w2s(q[0], q[1]), b = R.w2s(q[2], q[3]); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
-    ctx.stroke();
+    const R = this.R, st = Object.assign({}, this.style(), d), G = this.D.geom(st);
+    const cd = this.css(st.clrd), ce = this.css(st.clre), ct = this.css(st.clrt);
+    ctx.save(); ctx.lineWidth = 1;
+    for (const role of ['e', 'd']) {
+      ctx.strokeStyle = role === 'e' ? ce : cd; ctx.beginPath();
+      for (const q of G.segs) { if (q[4] !== role) continue; const a = R.w2s(q[0], q[1]), b = R.w2s(q[2], q[3]); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
+      ctx.stroke();
+    }
+    ctx.fillStyle = cd;
     for (const q of G.tris) { const a = R.w2s(q[0], q[1]), b = R.w2s(q[2], q[3]), c = R.w2s(q[4], q[5]); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.lineTo(c[0], c[1]); ctx.closePath(); ctx.fill(); }
     for (const t of G.texts) {
       const s = R.w2s(t.x, t.y), px = Math.max(9, t.h * R.scale * 1.35);
-      ctx.save(); ctx.translate(s[0], s[1]); ctx.rotate(-t.rot * Math.PI / 180);
+      ctx.save(); ctx.fillStyle = ct; ctx.translate(s[0], s[1]); ctx.rotate(-t.rot * Math.PI / 180);
       ctx.font = px + 'px Arial, "Segoe UI", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(t.str.replace(/%%c/gi, 'Ø').replace(/%%d/gi, '°'), 0, 0); ctx.restore();
     }
@@ -160,21 +191,52 @@ FastDXF.use({
     app.addCommand(['dra', 'dimradius'], 'dimradius', 'Yarıçap ölçüsü', 'Ölçülendir');
     app.addCommand(['ddi', 'dimdiameter'], 'dimdiameter', 'Çap ölçüsü', 'Ölçülendir');
     app.addCommand(['dan', 'dimangular'], 'dimangular', 'Açı ölçüsü', 'Ölçülendir');
-    // ölçü ayarları
+    // ölçü ayarları (her yeni ölçüye AutoCAD stil geçersiz kılması olarak yazılır)
+    const COLORS = [[0, 'Bloğa göre (ölçünün rengi)'], [256, 'Katmana göre'], [1, 'Kırmızı'], [2, 'Sarı'], [3, 'Yeşil'], [4, 'Camgöbeği'], [5, 'Mavi'], [6, 'Eflatun'],
+      [7, 'Beyaz / siyah'], [8, 'Koyu gri'], [9, 'Açık gri'], [30, 'Turuncu'], [40, 'Altın'], [150, 'Gök mavisi'], [210, 'Pembe'], [250, 'Antrasit']];
+    const colorSel = (id, v) => {
+      const opts = COLORS.some(c => c[0] === v) ? COLORS : COLORS.concat([[v, 'ACI ' + v]]);
+      return '<div class="dclr"><i id="' + id + 'S"></i><select id="' + id + '">' + opts.map(([k, l]) => '<option value="' + k + '"' + (k === v ? ' selected' : '') + '>' + esc(l) + '</option>').join('') + '</select></div>';
+    };
     const styleDialog = () => {
       const st = app.settings;
-      app.modal('<h2>Ölçü ayarları</h2><label>Yazı yüksekliği (0: görünüme göre otomatik)</label><input type="text" id="dH" value="' + (st.dimH || 0) + '">' +
-        '<label>Ondalık basamak</label><input type="text" id="dDec" value="' + (st.dimDec !== undefined ? st.dimDec : 2) + '">' +
-        '<label>Ondalık ayırıcı</label><select id="dSep"><option value=","' + ((st.dimSep || ',') === ',' ? ' selected' : '') + '>Virgül (12,50)</option><option value="."' + (st.dimSep === '.' ? ' selected' : '') + '>Nokta (12.50)</option></select>' +
-        '<div style="color:var(--muted);font-size:12px;margin-top:8px">Ok boyu = yazı yüksekliği; uzatma çizgisi aralığı ve taşması ISO-25 oranlarında. Değerler her ölçüye AutoCAD stil geçersiz kılması olarak yazılır.</div>' +
+      app.modal('<h2>Ölçü ayarları</h2><div class="dgrid">' +
+        '<div><label>Yazı yüksekliği (0: görünüme göre)</label><input type="text" id="dH" value="' + (st.dimH || 0) + '"></div>' +
+        '<div><label>Ondalık basamak</label><input type="text" id="dDec" value="' + (st.dimDec !== undefined ? st.dimDec : 2) + '"></div>' +
+        '<div><label>Ondalık ayırıcı</label><select id="dSep"><option value=","' + ((st.dimSep || ',') === ',' ? ' selected' : '') + '>Virgül (12,50)</option><option value="."' + (st.dimSep === '.' ? ' selected' : '') + '>Nokta (12.50)</option></select></div>' +
+        '<div><label>Uç tipi</label><select id="dTick"><option value="0"' + (st.dimTick ? '' : ' selected') + '>Ok (dolu, kapalı)</option><option value="1"' + (st.dimTick ? ' selected' : '') + '>Eğik çizgi (inşaat / mimari)</option></select></div>' +
+        '<div><label>Ölçü çizgisi ve ok rengi</label>' + colorSel('dCD', st.dimClrD | 0) + '</div>' +
+        '<div><label>Uzatma çizgisi rengi</label>' + colorSel('dCE', st.dimClrE | 0) + '</div>' +
+        '<div><label>Yazı rengi</label>' + colorSel('dCT', st.dimClrT | 0) + '</div>' +
+        '<div><label>Önizleme</label><canvas id="dPrev" width="220" height="64" class="dprev"></canvas></div>' +
+        '</div><label class="chkrow"><input type="checkbox" id="dAll"> Bu programda çizilmiş tüm ölçülere de uygula</label>' +
+        '<div style="color:var(--muted);font-size:12px;margin-top:6px;max-width:520px">Ok / eğik çizgi boyu yazı yüksekliğine eşittir; uzatma çizgisi aralığı ve taşması ISO-25 oranlarındadır. Değerler AutoCAD ölçü stili geçersiz kılması (DIMCLRD, DIMCLRE, DIMCLRT, DIMTSZ…) olarak kaydedilir.</div>' +
         '<div class="btns"><button class="btn" id="mNo">Vazgeç</button><button class="btn pri" id="mOk">Kaydet</button></div>', d => {
-        d.querySelector('#mOk').onclick = () => {
-          const h = num(d.querySelector('#dH').value), dec = Math.max(0, Math.min(8, Math.round(num(d.querySelector('#dDec').value))));
-          app.closeModal();
-          app.setSetting('dimH', h > 0 ? h : 0); app.setSetting('dimDec', isFinite(dec) ? dec : 2); app.setSetting('dimSep', d.querySelector('#dSep').value);
-          app.toast('Ölçü ayarları kaydedildi');
+        const q = (id) => d.querySelector('#' + id);
+        const read = () => ({ h: num(q('dH').value), dec: Math.max(0, Math.min(8, Math.round(num(q('dDec').value)))), sep: q('dSep').value, tick: q('dTick').value === '1',
+          cd: +q('dCD').value, ce: +q('dCE').value, ct: +q('dCT').value });
+        const prev = () => {
+          const v = read();
+          for (const [id, k] of [['dCD', v.cd], ['dCE', v.ce], ['dCT', v.ct]]) q(id + 'S').style.background = T.css(k);
+          const c = q('dPrev'), g = c.getContext('2d'), G = T.D.geom({ kind: 'linear', x1: 30, y1: 8, x2: 190, y2: 8, lx: 110, ly: 36, rot: 0, h: 9, dec: isFinite(v.dec) ? v.dec : 2, sep: v.sep, tsz: v.tick ? 9 : 0, dle: v.tick ? 4.5 : 0 });
+          g.clearRect(0, 0, c.width, c.height); g.lineWidth = 1.2;
+          const Y = (y) => c.height - y;
+          for (const role of ['e', 'd']) { g.strokeStyle = T.css(role === 'e' ? v.ce : v.cd); g.beginPath(); for (const s2 of G.segs) if (s2[4] === role) { g.moveTo(s2[0], Y(s2[1])); g.lineTo(s2[2], Y(s2[3])); } g.stroke(); }
+          g.fillStyle = T.css(v.cd); for (const t3 of G.tris) { g.beginPath(); g.moveTo(t3[0], Y(t3[1])); g.lineTo(t3[2], Y(t3[3])); g.lineTo(t3[4], Y(t3[5])); g.fill(); }
+          g.fillStyle = T.css(v.ct); g.font = '12px Arial, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+          for (const t of G.texts) g.fillText(t.str.replace(/%%c/gi, 'Ø').replace(/%%d/gi, '°'), t.x, Y(t.y));
         };
-        d.querySelector('#mNo').onclick = () => app.closeModal();
+        d.querySelectorAll('input,select').forEach(el => { el.oninput = prev; el.onchange = prev; });
+        prev();
+        q('mOk').onclick = async () => {
+          const v = read(), all = q('dAll').checked;
+          app.closeModal();
+          Object.assign(app.settings, { dimH: v.h > 0 ? v.h : 0, dimDec: isFinite(v.dec) ? v.dec : 2, dimSep: v.sep, dimTick: v.tick, dimClrD: v.cd, dimClrE: v.ce, dimClrT: v.ct });
+          app.setSetting('dimH', app.settings.dimH);
+          if (all) { const n = await T.restyleAll(); app.toast('Ölçü ayarları kaydedildi; ' + n + ' ölçü güncellendi'); }
+          else app.toast('Ölçü ayarları kaydedildi (yeni ölçülerde geçerli)');
+        };
+        q('mNo').onclick = () => app.closeModal();
       });
     };
     app.addCommand(['dimstyle', 'd', 'ölçüayar', 'olcuayar'], 'dimstyle', 'Ölçü ayarları', 'Ölçülendir', styleDialog);
@@ -182,6 +244,7 @@ FastDXF.use({
     const sprite = document.querySelector('svg symbol') && document.querySelector('svg symbol').parentNode;
     if (sprite) sprite.insertAdjacentHTML('beforeend',
       '<symbol id="i-dim" viewBox="0 0 24 24"><path d="M4 7v10M20 7v10M4 12h16"/><path d="M4 12l3-2v4zM20 12l-3-2v4z" fill="currentColor"/></symbol>' +
+      '<symbol id="i-dimal" viewBox="0 0 24 24"><g transform="rotate(-32 12 12)"><path d="M4 8v8M20 8v8M4 12h16"/><path d="M4 12l3-2v4zM20 12l-3-2v4z" fill="currentColor"/></g></symbol>' +
       '<symbol id="i-dimang" viewBox="0 0 24 24"><path d="M4 20L20 20M4 20L15 6"/><path d="M12 20a8 8 0 00-2.6-5.9"/></symbol>' +
       '<symbol id="i-dimrad" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 12l5.6-5.6"/></symbol>');
     const mbtn = document.getElementById('measStack');
@@ -190,11 +253,19 @@ FastDXF.use({
       '<button class="arr dd-btn" title="Tüm ölçü araçları">▾</button><div class="dd-menu">' +
       '<div class="mhead">Ölçülendir</div>' +
       '<button class="mi" data-tool="dimlinear"><svg class="i"><use href="#i-dim"/></svg><span class="lbl">Doğrusal (yatay/düşey)</span><span class="sc">DLI</span></button>' +
-      '<button class="mi" data-tool="dimaligned"><svg class="i"><use href="#i-dim"/></svg><span class="lbl">Hizalı</span><span class="sc">DAL</span></button>' +
+      '<button class="mi" data-tool="dimaligned"><svg class="i"><use href="#i-dimal"/></svg><span class="lbl">Hizalı</span><span class="sc">DAL</span></button>' +
       '<button class="mi" data-tool="dimangular"><svg class="i"><use href="#i-dimang"/></svg><span class="lbl">Açı</span><span class="sc">DAN</span></button>' +
       '<button class="mi" data-tool="dimradius"><svg class="i"><use href="#i-dimrad"/></svg><span class="lbl">Yarıçap</span><span class="sc">DRA</span></button>' +
       '<button class="mi" data-tool="dimdiameter"><svg class="i"><use href="#i-dimrad"/></svg><span class="lbl">Çap</span><span class="sc">DDI</span></button>' +
       '<div class="mhead">Ayarlar</div><button class="mi" data-cmd="dimstyle"><svg class="i"><use href="#i-gear"/></svg><span class="lbl">Ölçü ayarları…</span><span class="sc">D</span></button>' +
       '</div></div>');
+    // bölünmüş düğme son kullanılan ölçü aracını gösterir (çizim menüsü gibi)
+    const DIM_UI = { dimlinear: ['dim', 'Ölçü', 'Doğrusal ölçü (DLI)'], dimaligned: ['dimal', 'Hizalı', 'Hizalı ölçü (DAL)'], dimangular: ['dimang', 'Açı', 'Açı ölçüsü (DAN)'],
+      dimradius: ['dimrad', 'Yarıçap', 'Yarıçap ölçüsü (DRA)'], dimdiameter: ['dimrad', 'Çap', 'Çap ölçüsü (DDI)'] };
+    app.hooks.tool.push((name) => {
+      const u = DIM_UI[name], mb = document.querySelector('#ddDim > .big'); if (!u || !mb) return;
+      mb.dataset.tool = name; mb.title = u[2];
+      mb.innerHTML = '<svg class="i"><use href="#i-' + u[0] + '"/></svg><span>' + u[1] + '</span>';
+    });
   }
 });

@@ -139,7 +139,7 @@
   #toast { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); background: rgba(25,28,33,.97); border: 1px solid var(--line2); border-radius: 10px; padding: 8px 14px; display: none; z-index: 6; max-width: 80%; box-shadow: 0 8px 22px rgba(0,0,0,.35); pointer-events: none; }
   #textwarn { position: absolute; right: 10px; bottom: 10px; font-size: 11px; color: var(--warn); background: rgba(17,19,23,.8); padding: 3px 7px; border-radius: 5px; display: none;  pointer-events: none; }
   #viewName { position: absolute; left: 10px; top: 8px; font-size: 11px; color: var(--muted); background: rgba(17,19,23,.6); padding: 2px 8px; border-radius: 5px; pointer-events: none; z-index: 3; }
-  #zlegend { position: absolute; left: 10px; bottom: 10px; width: 220px; background: rgba(17,19,23,.85); border: 1px solid var(--line2); border-radius: 7px; padding: 6px 8px; font-size: 11px; display: none; z-index: 3; pointer-events: none; }
+  #zlegend { position: absolute; left: 88px; bottom: 10px; width: 220px; background: rgba(17,19,23,.85); border: 1px solid var(--line2); border-radius: 7px; padding: 6px 8px; font-size: 11px; display: none; z-index: 3; pointer-events: none; }
   #zlegend .bar { height: 8px; border-radius: 3px; margin: 4px 0 2px; background: linear-gradient(90deg, #2b59d9, #1abfd9, #33cc40, #fad926, #e64026); }
   #zlegend .ends { display: flex; justify-content: space-between; color: var(--text); }
   /* gizmo kipi */
@@ -212,6 +212,20 @@
   pre.raw { background: var(--bg); padding: 10px; border-radius: 7px; max-height: 60vh; overflow: auto; font: 12px/1.35 Consolas, monospace; white-space: pre; }
   .help td { padding: 3px 10px 3px 0; vertical-align: top; }
   .set { display: grid; grid-template-columns: 170px 1fr; gap: 4px 18px; width: min(640px, 86vw); }
+  .dgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; width: min(520px, 86vw); }
+  .dclr { display: flex; gap: 6px; align-items: center; }
+  .dclr i { width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--line2); flex: none; }
+  .dprev { width: 100%; height: 64px; background: var(--bg); border: 1px solid var(--line2); border-radius: 7px; }
+  .dlg label.chkrow { display: flex; gap: 6px; align-items: center; color: var(--text); margin-top: 12px; }
+  .cl { width: min(680px, 86vw); }
+  .clv { border: 1px solid var(--line); border-radius: 9px; padding: 8px 12px; margin-bottom: 8px; }
+  .clv.cur { border-color: var(--accent); }
+  .clh { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .clh b { font-size: 14px; color: var(--accent); }
+  .clh em { margin-left: auto; color: var(--muted); font-style: normal; font-size: 11px; }
+  .clv ul { margin: 6px 0 2px; padding-left: 18px; }
+  .clv li { margin: 3px 0; line-height: 1.45; }
+  #bVer { font-size: 11px; color: var(--muted); padding: 0 8px; }
   .set h4 { grid-column: 1 / -1; margin: 14px 0 2px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
   .set h4:first-child { margin-top: 0; }
   .set .lb { color: var(--text); padding-top: 6px; }
@@ -514,6 +528,10 @@
 <script src="js/tracking.js"></script>
 <script src="js/text-tool.js"></script>
 <script src="js/dim.js"></script>
+<script src="js/dyn-input.js"></script>
+<script src="js/grips.js"></script>
+<script src="js/view-aids.js"></script>
+<script src="js/changelog.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

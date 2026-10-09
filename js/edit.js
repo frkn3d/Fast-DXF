@@ -7,8 +7,8 @@ const NO_MOVE_TYPES = new Set([12, 20]); // DIMENSION, ACAD_TABLE: blok tabanlı
 const T_ID = [1, 0, 0, 1, 0, 0, 1, 0];
 
 class Editor {
-  constructor(app) { this.app = app; this.S = app.store; this.R = app.R; this.core = app.core; this.undoStack = []; this.redoStack = []; }
-  reset() { this.undoStack = []; this.redoStack = []; }
+  constructor(app) { this.app = app; this.S = app.store; this.R = app.R; this.core = app.core; this.undoStack = []; this.redoStack = []; this.hidCol = new Map(); }
+  reset() { this.undoStack = []; this.redoStack = []; this.hidCol = new Map(); }
   exec(cmd) { cmd.do(); this.undoStack.push(cmd); this.redoStack = []; this.after(); }
   undo() { const c = this.undoStack.pop(); if (!c) return; c.undo(); this.redoStack.push(c); this.after(); this.app.toast('Geri alındı: ' + c.label); }
   redo() { const c = this.redoStack.pop(); if (!c) return; c.do(); this.undoStack.push(c); this.after(); this.app.toast('Yinelendi: ' + c.label); }
@@ -82,7 +82,10 @@ class Editor {
   setDeleted(ids, del) {
     const S = this.S, E = S.E;
     for (const id of ids) {
-      this.paint(id, del ? 0 : E.color.a[id]);
+      // gizlerken köşe renkleri tek renk değilse (ör. renkli ölçü parçaları) saklanır, geri getirirken aynen yazılır
+      const hidden = (E.flags.a[id] & F_DEL) !== 0;
+      if (del && !hidden) { const c = this.colors(id); if (c) this.hidCol.set(id, c); this.paint(id, 0); }
+      else if (!del && hidden) { const c = this.hidCol.get(id); if (c) { this.restoreColors(id, c); this.hidCol.delete(id); } else this.paint(id, E.color.a[id]); }
       const is = E.is.a[id], ic = E.ic.a[id];
       for (let k = is; k < is + ic; k++) { const B = S.blocks[S.IN.blk.a[k]]; B.f.a[S.IN.slot.a[k] * 8 + 7] = del ? 0 : 1; B.instDirty = true; }
       const ts = E.ts.a[id], tc = E.tc.a[id];
@@ -92,6 +95,23 @@ class Editor {
       const L = S.layers[E.layer.a[id]]; if (L && was !== del) L.count += del ? -1 : 1;
       if (!(E.flags.a[id] & F_NEW)) { const e = this.ed(id); e.del = del; }
     }
+  }
+  // Varlığın köşe renkleri tek renk değilse kopyası (değilse null)
+  colors(id) {
+    const S = this.S, E = S.E, ch = S.chunks[E.chunk.a[id]], vs = E.vs.a[id], vc = E.vc.a[id], rs = E.rs.a[id], rc = E.rc.a[id];
+    if (!ch) return null;
+    const pts = (E.flags.a[id] & F_POINTS) !== 0, C = pts ? ch.pcol : ch.col, c0 = E.color.a[id];
+    let mixed = false;
+    for (let v = vs; v < vs + vc && !mixed; v++) if (C[v] !== c0) mixed = true;
+    for (let v = rs; v < rs + rc && !mixed; v++) if (ch.tcol[v] !== c0) mixed = true;
+    return mixed ? { c: C.slice(vs, vs + vc), t: rc ? ch.tcol.slice(rs, rs + rc) : null } : null;
+  }
+  restoreColors(id, k) {
+    const S = this.S, E = S.E, ch = S.chunks[E.chunk.a[id]], vs = E.vs.a[id], vc = E.vc.a[id], rs = E.rs.a[id], rc = E.rc.a[id];
+    if (!ch) return;
+    const pts = (E.flags.a[id] & F_POINTS) !== 0, C = pts ? ch.pcol : ch.col;
+    if (vc && k.c.length === vc) { C.set(k.c, vs); this.mark(ch, pts ? 'pcol' : 'col', vs, vs + vc); }
+    if (rc && k.t && k.t.length === rc) { ch.tcol.set(k.t, rs); this.mark(ch, 'tcol', rs, rs + rc); }
   }
   // Varlığın kendi köşe/örnek/yazı renklerini yaz (0 = gizli)
   paint(id, rgba) {

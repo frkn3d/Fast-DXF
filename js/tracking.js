@@ -3,8 +3,16 @@
  *  · Alınan noktalardan yatay/dikey (kutupsal açıksa tüm açı adımlarında) sonsuz hiza çizgileri çıkar; imleç çizgiye,
  *    iki çizginin kesişimine oturur.
  *  · Kutupsal: aracın son noktasından açı adımlarında (90°, 45°, 30°…) ışınlar.
+ *  · Çizilmekte olan nesnenin önceki noktaları (polyline köşeleri…) kendiliğinden hizalanır.
  *  · Hiza etkinken sayı yazmak: o yönde o uzaklıkta nokta (doğrudan uzaklık girişi). */
 'use strict';
+
+// birim yön; 90°'nin katlarında tam değer (cos 90° = 6e-17 artığı yatay/düşey hizayı bozmasın)
+function dirOf(deg) {
+  const k = ((deg % 360) + 360) % 360;
+  if (Math.abs(k - Math.round(k / 90) * 90) < 1e-9) return [[1, 0], [0, 1], [-1, 0], [0, -1]][Math.round(k / 90) % 4];
+  const r = deg * Math.PI / 180; return [Math.cos(r), Math.sin(r)];
+}
 
 class Tracker {
   constructor(app) {
@@ -48,14 +56,15 @@ class Tracker {
     const tol = (this.app.settings.aperture || 12) / this.R.scale;
     const lines = [];
     const trackAng = this.polar ? this.angles() : [0, 90, 180, 270];
-    // alınan noktalar: iki yönlü sonsuz çizgi
-    for (const q of this.acq) for (const a of trackAng) if (a < 180) lines.push({ o: q, ang: a, both: true, src: 'iz' });
+    // alınan noktalar ve çizilmekte olan nesnenin önceki noktaları (ör. polyline'ın ilk noktası): iki yönlü sonsuz çizgi
+    const own = this.otrack ? this.app.toolPts().slice(-6).filter(q => !(base && Math.hypot(q[0] - base[0], q[1] - base[1]) < 1e-9)) : [];
+    for (const q of this.acq.concat(own)) for (const a of trackAng) if (a < 180) lines.push({ o: q, ang: a, both: true, src: 'iz' });
     // kutupsal: son noktadan ışın
     if (this.polar && base) for (const a of this.angles()) lines.push({ o: base, ang: a, both: false, src: 'kutupsal' });
     if (!lines.length) return null;
     const cand = [];
     for (const L of lines) {
-      const r = L.ang * Math.PI / 180, dx = Math.cos(r), dy = Math.sin(r);
+      const [dx, dy] = dirOf(L.ang);
       const vx = p[0] - L.o[0], vy = p[1] - L.o[1], t = vx * dx + vy * dy;
       if (!L.both && t <= 0) continue;
       const d = Math.abs(-vx * dy + vy * dx);
@@ -71,6 +80,8 @@ class Tracker {
       const den = best.dx * c.dy - best.dy * c.dx; if (Math.abs(den) < 1e-9) continue;
       const wx = c.L.o[0] - best.L.o[0], wy = c.L.o[1] - best.L.o[1], s = (wx * c.dy - wy * c.dx) / den;
       const X = [best.L.o[0] + best.dx * s, best.L.o[1] + best.dy * s];
+      // yatay / düşey hizada ilgili koordinat tam kaynak noktanınki
+      for (const q of [best, c]) { if (q.dy === 0) X[1] = q.L.o[1]; if (q.dx === 0) X[0] = q.L.o[0]; }
       if (Math.hypot(X[0] - p[0], X[1] - p[1]) <= tol * 1.5) { pt = X; used = [best, c]; break; }
     }
     const z = best.L.o[2] !== undefined ? best.L.o[2] : 0;
@@ -78,7 +89,8 @@ class Tracker {
     const head = used[0], dist = Math.hypot(pt[0] - head.L.o[0], pt[1] - head.L.o[1]);
     let ang = Math.atan2(pt[1] - head.L.o[1], pt[0] - head.L.o[0]) * 180 / Math.PI; if (ang < 0) ang += 360;
     const label = used.length > 1 ? 'Hiza kesişimi' : (head.L.src === 'kutupsal' ? 'Kutupsal' : 'Hiza') + ': ' + fmtC(dist) + ' < ' + (+ang.toFixed(2)) + '°';
-    this.active = { p: res, used, label, from: head.L.o, dir: [Math.cos(ang * Math.PI / 180), Math.sin(ang * Math.PI / 180)] };
+    const dir = used.length === 1 ? (head.t >= 0 ? [head.dx, head.dy] : [-head.dx, -head.dy]) : dirOf(ang);
+    this.active = { p: res, used, label, from: head.L.o, dir };
     return res;
   }
   // doğrudan uzaklık girişi: hiza yönünde

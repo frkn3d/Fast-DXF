@@ -225,11 +225,25 @@ class Renderer {
     cam.M = M;
     return cam;
   }
+  // z verilmezse: 3B çizimde çalışma düzleminin kotu (drawZ), yoksa hedef kotu
   w2s(x, y, z) {
     if (this.is2D) return [(x - this.cx) * this.scale + this.W / 2, this.H / 2 - (y - this.cy) * this.scale];
     const out = [NaN, NaN];
-    this.cam().project(x, y, z === undefined ? this.cz : z, out);
+    this.cam().project(x, y, z === undefined ? (this.drawZ !== undefined ? this.drawZ : this.cz) : z, out);
     return out;
+  }
+  // Ekran noktasının dünya ışını {o, d} (göreli koordinat, Z abartmasız)
+  ray3(px, py) {
+    const { r, u, f } = this.basis(), zs = this.zs, s = this.scale;
+    const a = (px - this.W / 2) / s, b = (this.H / 2 - py) / s;
+    const q = [this.cx + r[0] * a + u[0] * b, this.cy + r[1] * a + u[1] * b, this.cz * zs + u[2] * b];
+    let o, d;
+    if (this.persp) {
+      const Dist = (this.H / 2) / (s * Math.tan(this.fov * DEG / 2));
+      o = [this.cx - f[0] * Dist, this.cy - f[1] * Dist, this.cz * zs - f[2] * Dist];
+      d = [q[0] - o[0], q[1] - o[1], q[2] - o[2]];
+    } else { o = q; d = f.slice(); }
+    return { o: [o[0], o[1], o[2] / zs], d: [d[0], d[1], d[2] / zs] };
   }
   // Ekran noktasından dünya: 3B'de hedef kotundaki yatay düzlemle kesişim
   s2w(px, py) {

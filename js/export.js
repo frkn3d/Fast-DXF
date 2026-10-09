@@ -101,7 +101,9 @@ const Export = {
     const msg = {
       mode, encoding: info.encoding, eol: info.eol, version: info.version, owner: info.modelHandle,
       handseed: info.handseed, handseedHex: info.handseedHex, entStart: info.entStart, entEnd: info.entEnd, ops, copies, news,
-      newLayers, layerMods, layerEnd: info.layerEnd === undefined ? -1 : info.layerEnd, layerTableHandle: info.layerTableHandle || ''
+      newLayers, layerMods, layerEnd: info.layerEnd === undefined ? -1 : info.layerEnd, layerTableHandle: info.layerTableHandle || '',
+      // yeni ölçülerin anonim *D blokları için (yoksa ölçüler çizgi/ok/yazıya patlatılır)
+      brEnd: info.brEnd === undefined ? -1 : info.brEnd, brTableHandle: info.brTableHandle || '', blocksEnd: info.blocksEnd === undefined ? -1 : info.blocksEnd, dimMax: info.dimMax || 0
     };
     app.busy('DXF hazırlanıyor…');
     const w = spawnWorker(saveWorkerMain);
