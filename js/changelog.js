@@ -4,6 +4,10 @@
 'use strict';
 
 const CHANGELOG = [
+  { v: '0.1.10', d: '2026-10-09', t: 'İmleçte araç ikonu', items: [
+    'Bir araç alındığında imlecin sağ üstünde o aracın ikonu görünür (çizgi, daire, ölçü, buda…); seçim, kaydırma ve yörüngede görünmez.',
+    'İmleç çevresindeki bilgiler yeniden yerleştirildi: hiza etiketi ikonun sağında, yakalama etiketi ile uzunluk / açı alanları altta; üst üste binmez.'
+  ] },
   { v: '0.1.9', d: '2026-10-09', t: 'Araç çubuğu düzeni, sürüm notları', items: [
     'Seçim çubuğunda "Noktalar" düğmesi Ölçekle\'nin sağına taşındı.',
     'Sürüm notları penceresi kaydırılabilir; son sürüm açık, eskileri başlığa tıklayınca açılır.',

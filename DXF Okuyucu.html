@@ -129,6 +129,9 @@
   #view { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #1b1e23; }
   #view > canvas { position: absolute; left: 0; top: 0; }
   #ov { cursor: crosshair; }
+  #curIco { position: absolute; left: 0; top: 0; width: 22px; height: 22px; display: none; pointer-events: none; z-index: 3;
+    border-radius: 5px; background: rgba(21,23,27,.82); border: 1px solid rgba(76,154,255,.55); color: #8fc1ff; box-sizing: border-box; padding: 2px; }
+  #curIco svg { width: 16px; height: 16px; display: block; }
   #drop { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 14px; color: var(--muted); pointer-events: none; text-align: center; padding: 20px; }
   #drop .big2 { font-size: 20px; color: var(--text); }
   #drop.hide { display: none; }
@@ -541,6 +544,7 @@
 <script src="js/grips.js"></script>
 <script src="js/view-aids.js"></script>
 <script src="js/changelog.js"></script>
+<script src="js/cursor-icon.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

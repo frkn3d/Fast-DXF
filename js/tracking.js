@@ -123,8 +123,8 @@ class Tracker {
       ctx.strokeStyle = '#3fb950'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(s[0] - 5, s[1] - 5); ctx.lineTo(s[0] + 5, s[1] + 5); ctx.moveTo(s[0] + 5, s[1] - 5); ctx.lineTo(s[0] - 5, s[1] + 5); ctx.stroke();
       ctx.font = '12px "Segoe UI", sans-serif';
       const w = ctx.measureText(a.label).width + 12;
-      ctx.fillStyle = 'rgba(21,23,27,.9)'; ctx.fillRect(s[0] + 14, s[1] - 34, w, 20);   // imlecin üstünde: yakalama etiketi ve dinamik giriş alanları altta
-      ctx.fillStyle = '#9be9a8'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(a.label, s[0] + 20, s[1] - 24);
+      ctx.fillStyle = 'rgba(21,23,27,.9)'; ctx.fillRect(s[0] + 38, s[1] - 34, w, 20);   // imlecin üstünde, araç ikonunun sağında: yakalama etiketi ve dinamik giriş alanları altta
+      ctx.fillStyle = '#9be9a8'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(a.label, s[0] + 44, s[1] - 24);
     }
     ctx.restore();
   }
