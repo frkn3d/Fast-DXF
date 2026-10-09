@@ -34,7 +34,8 @@ class Gizmo {
     this.hover = null; this.drag = null; this.center = null;
     this.ARM = 92;             // ekranda kol uzunluğu (piksel)
   }
-  get active() { return this.enabled && this.app.toolName === 'select' && this.S.done && this.S.selList.length > 0; }
+  // nokta düzenleme kipinde gizmo gizlenir (yalnız nokta tutamaçları)
+  get active() { return this.enabled && !this.app.pointMode && this.app.toolName === 'select' && this.S.done && this.S.selList.length > 0; }
   invalidate() { this.center = null; }
   // seçimin merkezi (göreli x,y ve gerçek z)
   origin() {

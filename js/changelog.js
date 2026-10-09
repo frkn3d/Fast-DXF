@@ -3,6 +3,13 @@
 'use strict';
 
 const CHANGELOG = [
+  { v: '0.1.7', d: '2026-10-09', t: 'Nokta düzenleme kipi', items: [
+    'Nesne seçilince noktalar artık kendiliğinden çıkmaz; seçim gizmo ile gelir.',
+    'Nokta düzenleme kipi: seçim çubuğundaki "Noktalar" düğmesi, nesneye çift tık ya da NOKTA komutu. Kipte gizmo gizlenir; uç, köşe, orta ve merkez noktaları görünür.',
+    'Bir noktaya tıklayıp yeni yerine tıklayın ya da sürükleyin; yakalama, hiza ve uzunluk / açı girişi çalışır, koordinat da yazılabilir (ör. 120,45). Kip, düzenlemeden sonra açık kalır.',
+    'Esc nokta kipinden çıkar (seçim kalır); boşluğa tıklamak seçimi ve kipi kapatır.',
+    'İsteyenler için Ayarlar → "Noktaları hemen göster" ile noktalar her seçimde görünür.'
+  ] },
   { v: '0.1.6', d: '2026-10-09', t: 'Metin düzenleme, ölçü ofsetleri ve birimi, tek katmanla başlangıç', items: [
     'Yazılar sonradan düzenlenebilir: tek yazı seçiliyken sağdaki Özellikler panelinde içerik, yükseklik ve açı kutusu; "Yerinde düzenle" düğmesi, ED komutu ya da yazıya çift tık.',
     'Dinamik giriş alanlarında hangi alanda olduğunuz açıkça görünür: "Uzunluk" / "Açı" etiketleri, etkin alanda mavi çerçeve ve yanıp sönen imleç, altında Tab\'ın ne yapacağını söyleyen ipucu.',

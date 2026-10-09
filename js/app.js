@@ -87,7 +87,7 @@ const SNAP_MODES = [['end', 'Uç nokta', '□'], ['mid', 'Orta nokta', '△'], [
 const SNAP_NAME = Object.fromEntries(SNAP_MODES.map(m => [m[0], m[1]]));
 const DEFAULT_SNAP = { end: true, mid: true, cen: true, quad: false, int: true, perp: false, near: false, node: true, ins: true };
 const DEFAULT_SETTINGS = { theme: 'dark', grid: true, aperture: 12, snapLabels: true, snap: DEFAULT_SNAP, gizmo: true, dynInput: true, wheelInvert: false, zoomSpeed: 1, textLimit: 25000, newUnits: 5, style: 'wire', otrack: true, polar: true, polarInc: 90,
-  dynFields: true, grips: true, originMark: true, axisTripod: true };
+  dynFields: true, gripsAlways: false, originMark: true, axisTripod: true };
 function loadSettings() {
   let o = {}; try { o = JSON.parse(localStorage.getItem('fastdxf.settings') || '{}') || {}; } catch (e) { o = {}; }
   const st = Object.assign({}, DEFAULT_SETTINGS, o); st.snap = Object.assign({}, DEFAULT_SNAP, o.snap || {});
@@ -469,9 +469,10 @@ class App {
     const need = { done, sel: done && sel, info: !!S.info, surf: S.surfaces.length > 0 };
     document.querySelectorAll('[data-need]').forEach(b => b.disabled = !need[b.dataset.need]);
     $('bUndo').disabled = !this.editor.undoStack.length; $('bRedo').disabled = !this.editor.redoStack.length;
+    if (this.pointMode && !(sel && done)) this.pointMode = false;
     const gb = $('gzBar'), show = this.gizmo.enabled && sel && done && this.toolName === 'select';
     gb.classList.toggle('show', !!(sel && done && this.toolName === 'select'));
-    gb.querySelectorAll('[data-gizmo]').forEach(b => b.classList.toggle('on', b.dataset.gizmo === 'off' ? !this.gizmo.enabled : (this.gizmo.enabled && b.dataset.gizmo === this.gizmo.mode)));
+    gb.querySelectorAll('[data-gizmo]').forEach(b => b.classList.toggle('on', b.dataset.gizmo === 'points' ? !!this.pointMode : this.pointMode ? false : b.dataset.gizmo === 'off' ? !this.gizmo.enabled : (this.gizmo.enabled && b.dataset.gizmo === this.gizmo.mode)));
     if (!show) this.gizmo.hover = null;
   }
 
@@ -846,7 +847,7 @@ class App {
 
     this.tools = {
       select: {
-        prompt: () => app.pendingTool ? 'Nesneleri seçin, bitince Enter / sağ tık' : (R.is2D ? 'Seç: tıklayın · soldan sağa pencere: tamamen içindekiler · sağdan sola: kesişenler · Shift: ekle/çıkar · komut yazabilirsiniz (L, TR, M…)'
+        prompt: () => app.pointMode ? 'Nokta düzenleme: noktaya tıklayın → yeni yere tıklayın ya da sürükleyin (yakalama, hiza, uzunluk/açı geçerli) · Esc: kipten çık' : app.pendingTool ? 'Nesneleri seçin, bitince Enter / sağ tık' : (R.is2D ? 'Seç: tıklayın · soldan sağa pencere: tamamen içindekiler · sağdan sola: kesişenler · Shift: ekle/çıkar · komut yazabilirsiniz (L, TR, M…)'
           : '3B: tıklayarak / pencereyle seçin · Shift + orta tuş: yörünge · orta tuş: kaydır · tekerlek: yakınlaş'),
         down(p, e) { this.drag = { sx: e.offsetX, sy: e.offsetY, w: [app.mouse.wx, app.mouse.wy], shift: e.shiftKey, box: false }; },
         move(e) { const d = this.drag; if (d && Math.hypot(e.offsetX - d.sx, e.offsetY - d.sy) > 4) { d.box = true; R.request(); } },
@@ -1791,7 +1792,7 @@ class App {
       row('Seçim tutamacı', 'Seçimde X/Y/Z taşı · döndür · ölçekle tutamacı', sw('gizmo', st.gizmo)) +
       row('Dinamik komut girişi', 'Çizim alanında harf yazınca komut satırına gider', sw('dynInput', st.dynInput)) +
       row('İmleçte uzunluk / açı', 'Sayı yazınca imlecin yanındaki alana girer; Tab: alan değiştir ve değeri kilitle', sw('dynFields', st.dynFields)) +
-      row('Nokta tutamaçları', 'Seçili nesnelerin uç / orta / merkez noktalarından düzenleme', sw('grips', st.grips)) +
+      row('Noktaları hemen göster', 'Kapalıyken seçimde noktalar çıkmaz; seçim çubuğundaki Noktalar düğmesi, çift tık ya da NOKTA komutuyla açılır', sw('gripsAlways', st.gripsAlways)) +
       '<h4>Fare</h4>' +
       row('Tekerlek yönü', 'Yakınlaştırma yönünü ters çevir', sw('wheelInvert', st.wheelInvert)) +
       row('Yakınlaştırma hızı', '', rng('zoomSpeed', 0.3, 3, 0.1, fmts.zoomSpeed)) +
@@ -1820,6 +1821,8 @@ class App {
     document.querySelectorAll('[data-style]').forEach(b => b.onclick = () => this.setStyle(b.dataset.style));
     document.querySelectorAll('[data-gizmo]').forEach(b => b.onclick = () => {
       const g = b.dataset.gizmo;
+      if (g === 'points') { this.setPointMode(!this.pointMode); return; }
+      this.pointMode = false; if (this.grips) { this.grips.key = ''; this.grips.refresh(); }
       if (g === 'off') this.gizmo.enabled = !this.gizmo.enabled; else { this.gizmo.enabled = true; this.gizmo.mode = g; }
       this.updateButtons(); R.request();
     });
@@ -2004,6 +2007,7 @@ class App {
     const t = this.tool;
     if (this.toolName !== 'select') { this.setTool('select'); return; }
     if (t.drag) { t.drag = null; this.R.request(); return; }
+    if (this.pointMode) { this.setPointMode(false); return; }   // önce nokta kipinden çık, seçim kalsın
     this.pendingTool = null;
     if (this.marker) { this.marker = null; this.R.request(); }
     if (this.store.selList.length) { this.store.clearSel(); this.selChanged(); }
@@ -2021,6 +2025,15 @@ class App {
     if (t.right && t.right()) { this.updatePrompt(); this.R.request(); return; }
     if (t.enter && t.enter()) { this.updatePrompt(); this.R.request(); return; }
     if (this.toolName !== 'select') this.setTool('select');
+  }
+  // Nokta düzenleme kipi: seçili nesnelerin noktaları görünür, gizmo gizlenir
+  setPointMode(on, quiet) {
+    const S = this.store;
+    if (on && !S.selList.length) { this.toast('Önce noktalarını düzenleyeceğiniz nesneyi seçin.'); on = false; }
+    this.pointMode = !!on; this.gizmo.hover = null;
+    if (this.grips) { this.grips.key = ''; this.grips.refresh(); }
+    this.updateButtons(); this.updatePrompt(); this.R.request();
+    if (on && !quiet) this.toast('Nokta düzenleme: mavi noktaya tıklayın, sonra yeni yerine tıklayın (ya da sürükleyin). Esc: kipten çık.', 5000);
   }
   toggleSnap() { this.snapOn = !this.snapOn; $('tSnap').classList.toggle('on', this.snapOn); this.snapPt = null; this.R.request(); }
   toggleOrtho() { this.ortho = !this.ortho; $('tOrtho').classList.toggle('on', this.ortho); }

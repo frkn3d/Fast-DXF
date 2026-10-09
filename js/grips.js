@@ -8,7 +8,8 @@
 
 class Grips {
   constructor(app) { this.app = app; this.R = app.R; this.S = app.store; this.list = []; this.key = ''; this.hot = null; this.hov = null; this.gen = 0; }
-  enabled() { return this.app.settings.grips !== false; }
+  // noktalar yalnız nokta düzenleme kipinde (ya da ayarlarda "hemen göster" açıksa)
+  enabled() { return !!this.app.pointMode || this.app.settings.gripsAlways === true; }
   def(id) {
     const app = this.app, c = app.defCache;
     if (c.has(id)) return Promise.resolve(c.get(id));
@@ -219,6 +220,17 @@ FastDXF.use({
       }
     };
     app.hooks.preview.push((ctx) => G.draw(ctx));
+    // nesneye çift tık (yazı değilse): onu seç ve nokta kipine geç
+    const sel = app.tools.select, prevDbl = sel.dbl;
+    sel.dbl = function () {
+      const S = app.store, id = S.grid && app.R.is2D ? S.pick(app.mouse.wx, app.mouse.wy, 6 / app.R.scale) : -1;
+      const t = id >= 0 ? app.core.TYPE_NAMES[S.E.type.a[id]] : '';
+      if (id >= 0 && t !== 'TEXT' && t !== 'MTEXT') { if (!S.sel[id]) { S.setSel([id], 'set'); app.selChanged(); } app.setPointMode(true); return; }
+      if (prevDbl) prevDbl.call(sel);
+    };
+    app.addCommand(['nokta', 'noktalar', 'points', 'grip'], 'pointmode', 'Nokta düzenleme kipi (seçili nesnenin noktalarını taşı)', 'Değiştir', () => app.setPointMode(!app.pointMode));
+    // simge
+    const sp = document.querySelector('svg symbol'); if (sp) sp.parentNode.insertAdjacentHTML('beforeend', '<symbol id="i-pts" viewBox="0 0 24 24"><path d="M5 18L19 6"/><rect x="2.5" y="15.5" width="5" height="5" fill="currentColor"/><rect x="16.5" y="3.5" width="5" height="5" fill="currentColor"/><rect x="9.5" y="9.5" width="5" height="5"/></symbol>');
     app.hooks.tool.push((name) => { if (name === 'select') { G.key = ''; G.refresh(); } });
     // seçim ya da düzenleme değişince
     const sc = app.selChanged.bind(app), oe = app.onEdited.bind(app);

@@ -2,7 +2,7 @@
 
 Büyük DXF dosyalarını (1 GB ve üzeri) açmak, 2B/3B gezmek, düzenlemek ve farklı formatlarda kaydetmek için kurulum gerektirmeyen bir araç.
 
-Sürüm: **0.1.6**. Tüm sürüm notları uygulamada üst çubuktaki sürüm düğmesinde (Ayarlar'ın solunda) ve `js/changelog.js` dosyasında.
+Sürüm: **0.1.7**. Tüm sürüm notları uygulamada üst çubuktaki sürüm düğmesinde (Ayarlar'ın solunda) ve `js/changelog.js` dosyasında.
 
 ## Başlatma
 
@@ -118,10 +118,11 @@ Tam liste programda **F1** ile açılır.
 
 Tüm düzenlemeler geri alınabilir (Ctrl+Z / Ctrl+Y).
 
-- **Nokta tutamaçları (grip):** Seçili nesnelerin (en çok 100) uç, köşe, orta, merkez, çeyrek ve ölçü noktalarında mavi kareler çıkar.
-  - Kareye tıklayın (kırmızı olur), yeni yere tıklayın; ya da basılı tutup sürükleyin. Yakalama, hizalama ve dinamik giriş bu sırada da çalışır. Esc / sağ tık vazgeçer.
+- **Nokta düzenleme kipi:** Seçimde noktalar kendiliğinden çıkmaz. Seçim çubuğundaki **Noktalar** düğmesi, nesneye **çift tık** ya da `NOKTA` komutu kipi açar; kipte gizmo gizlenir ve seçili nesnelerin (en çok 100) uç, köşe, orta, merkez, çeyrek ve ölçü noktaları mavi kare olarak görünür.
+  - Noktaya tıklayın (kırmızı olur), yeni yere tıklayın; ya da basılı tutup sürükleyin. Yakalama, hizalama ve uzunluk / açı girişi bu sırada da çalışır; `x,y` yazarak koordinat da verilebilir.
   - Uç / köşe / çeyrek / kontrol noktası: çizgiyi uzatır, polyline köşesini kaydırır, yarıçapı değiştirir. Polyline kenar ortası: kenarı öteler. Çizgi ortası, merkez, ekleme noktası: nesneyi taşır.
-  - Tutamaç karesi gizmonun üstünde çizilir ve tıklamayı alır; gizmo okunun geri kalanı gizmoya aittir.
+  - Kip düzenlemeden sonra açık kalır. **Esc** kipten çıkar (seçim kalır); boşluğa tıklamak seçimi ve kipi kapatır.
+  - Ayarlar → "Noktaları hemen göster" açılırsa noktalar her seçimde görünür (o zaman nokta karesi gizmonun üstündedir ve tıklamayı alır).
 - **3B görünümde çizim:** Çizim araçları, Taşı / Kopyala, Mesafe ve Alan 3B görünümde de çalışır. Yakalanan nokta 3B koordinatıyla alınır; boşluğa tıklanınca nokta çalışma düzlemine (önceki noktanın kotu, yoksa Z = 0) düşer. 3B'de hizalama yoktur.
 - **Seçim:**
   - Tıklayarak ya da pencereyle seçilir.
