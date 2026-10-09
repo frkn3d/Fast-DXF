@@ -6,7 +6,7 @@ Bu dosya, önceki konuşmalar kaybolsa bile uygulamada nasıl çalışılacağı
 
 - **Fast DXF:** tarayıcıda çalışan, kurulum gerektirmeyen DXF görüntüleyici ve düzenleyici. Büyük (1 GB+) dosyaları parça parça okur, çizer, düzenler, değişmeyen kısımları birebir koruyarak kaydeder.
 - **Klasör:** `C:\Users\User\Documents\FurkanProjeler\48-DXF Okuyucu\`
-- **Depo:** https://github.com/frkn3d/Fast-DXF (dal: `master`)
+- **Depo:** https://github.com/frkn3d/Fast-DXF (dal: `main`)
 - **Yayın (GitHub Pages):** https://frkn3d.github.io/Fast-DXF/ — `index.html` → `DXF Okuyucu.html`'e yönlendirir.
 - Derleme adımı, paket yöneticisi, çerçeve yok: düz HTML + klasik `<script>` dosyaları (`js/`).
 
