@@ -2250,6 +2250,7 @@ function DXFCore() {
       // ölçü stili geçersiz kılmaları (DSTYLE XDATA)
       p(1001, 'ACAD'); p(1000, 'DSTYLE'); p(1002, '{');
       for (const [code, key, gc] of DIM.OVR) { p(1070, code); p(gc, gc === 1070 ? Math.round(dd[key]) : n(dd[key])); }
+      p(1070, 144); p(1040, '1.0');   // DIMLFAC = 1: ölçü yazısı gerçek uzunluğu gösterir (stildeki ölçek çarpanı ezilir)
       p(1002, '}');
     } else if (t === 'MTEXT') {
       if (!modern) {

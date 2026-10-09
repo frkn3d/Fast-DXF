@@ -2,14 +2,14 @@
 
 Büyük DXF dosyalarını (1 GB ve üzeri) açmak, 2B/3B gezmek, düzenlemek ve farklı formatlarda kaydetmek için kurulum gerektirmeyen bir araç.
 
-Sürüm: **0.1.11**. Tüm sürüm notları uygulamada üst çubuktaki sürüm düğmesinde (Ayarlar'ın solunda) ve `js/changelog.js` dosyasında.
+Sürüm: **0.1.12**. Tüm sürüm notları uygulamada üst çubuktaki sürüm düğmesinde (Ayarlar'ın solunda) ve `js/changelog.js` dosyasında.
 
 ## Başlatma
 
 `DXF Okuyucu.html` dosyasına çift tıklayın. **Chrome veya Edge** önerilir.
 
 - DXF'i pencereye sürükleyin ya da **Dosya → Aç** (Ctrl+O).
-- Uygulama açılınca doğrudan boş bir çizim gelir (varsayılan birim santimetre; Ayarlar'dan mm, cm, m, km, inç, fit). Tek görünen katman **Genel**'dir; DXF'in zorunlu "0" ve "Defpoints" katmanları dosyada kalır, boşken listede gizlenir. Yeniden başlamak için **Dosya → Yeni çizim** (Ctrl+N).
+- Uygulama açılınca doğrudan boş bir çizim gelir (varsayılan birim milimetre — CAD programlarında 1 birim = 1 mm; Ayarlar'dan mm, cm, m, km, inç, fit). Tek görünen katman **Genel**'dir; DXF'in zorunlu "0" ve "Defpoints" katmanları dosyada kalır, boşken listede gizlenir. Yeniden başlamak için **Dosya → Yeni çizim** (Ctrl+N).
 - İnternet gerekmez; dosyanız bilgisayarınızdan çıkmaz.
 - Orijinal dosya hiçbir zaman değiştirilmez; kaydederken yeni bir dosya yazılır.
 
@@ -118,6 +118,8 @@ Tam liste programda **F1** ile açılır.
 
 Tüm düzenlemeler geri alınabilir (Ctrl+Z / Ctrl+Y).
 
+- **Dikdörtgen ve daire ölçüyle:** Dikdörtgende en / boy / açı, dairede yarıçap / çap kutuları; değeri yazıp Tab ile geçin, Enter ile oluşturun.
+- **Panelden ölçü düzenleme:** Tek daire, yay, çizgi ya da dikdörtgen seçiliyken Özellikler panelinde yarıçap, çap, uzunluk, açı, en, boy ve konum sayıyla değiştirilir (geri alınabilir).
 - **İmleç ikonu:** Bir araç alındığında imlecin sağ üstünde o aracın ikonu görünür; hiza etiketi ikonun sağında, yakalama etiketi ve uzunluk / açı alanları imlecin altındadır.
 - **Nokta düzenleme kipi:** Seçimde noktalar kendiliğinden çıkmaz. Seçim çubuğundaki **Noktalar** düğmesi, nesneye **çift tık** ya da `NOKTA` komutu kipi açar; kipte gizmo gizlenir ve seçili nesnelerin (en çok 100) uç, köşe, orta, merkez, çeyrek ve ölçü noktaları mavi kare olarak görünür.
   - Noktaya tıklayın (kırmızı olur), yeni yere tıklayın; ya da basılı tutup sürükleyin. Yakalama, hizalama ve uzunluk / açı girişi bu sırada da çalışır; `x,y` yazarak koordinat da verilebilir.

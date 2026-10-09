@@ -4,6 +4,13 @@
 'use strict';
 
 const CHANGELOG = [
+  { v: '0.1.12', d: '2026-10-09', t: 'Tam ölçülü dikdörtgen ve daire, panelden ölçü düzenleme, milimetre', items: [
+    'Dikdörtgen çizerken üç kutu: en, boy ve açı. Değeri yazıp Tab ile geçin, Enter ile oluşturun (ör. 1000 Tab 500 Enter). Yazılmayan değer imleçten alınır; açı verilirse dikdörtgen döndürülmüş çizilir.',
+    'Daire çizerken iki kutu: yarıçap ve çap (Tab ile çapa geçin).',
+    'Sağdaki Özellikler panelinde tek nesne seçiliyken ölçüler değiştirilebilir: daire (merkez, yarıçap, çap), yay (merkez, yarıçap, açılar), çizgi (başlangıç, uzunluk, açı), dikdörtgen (en, boy, açı, köşe). Geri alınabilir.',
+    'Ölçü yazıları başka CAD programlarında 100 kat büyük çıkıyordu (şablonda ölçek çarpanı 100 kalmıştı); düzeltildi, ölçüler ayrıca çarpanı 1 olarak kaydeder.',
+    'Yeni çizimin varsayılan birimi milimetre: CAD programlarında 1 birim = 1 mm. Santimetre ve diğer birimler Ayarlar\'dan seçilebilir.'
+  ] },
   { v: '0.1.11', d: '2026-10-09', t: 'Sade dinamik giriş', items: [
     'Uzunluk / açı alanlarında yazı yerine simge: uzunluk |—|, açı ∠. Alanların altındaki açıklama satırı kaldırıldı.'
   ] },

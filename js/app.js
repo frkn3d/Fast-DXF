@@ -86,13 +86,13 @@ const SNAP_MODES = [['end', 'Uç nokta', '□'], ['mid', 'Orta nokta', '△'], [
   ['perp', 'Dik', '⊥'], ['near', 'En yakın', '⧗'], ['node', 'Düğüm (nokta nesnesi)', '⊗'], ['ins', 'Ekleme noktası (blok, yazı)', '⊡']];
 const SNAP_NAME = Object.fromEntries(SNAP_MODES.map(m => [m[0], m[1]]));
 const DEFAULT_SNAP = { end: true, mid: true, cen: true, quad: false, int: true, perp: false, near: false, node: true, ins: true };
-const DEFAULT_SETTINGS = { theme: 'dark', grid: true, aperture: 12, snapLabels: true, snap: DEFAULT_SNAP, gizmo: true, dynInput: true, wheelInvert: false, zoomSpeed: 1, textLimit: 25000, newUnits: 5, style: 'wire', otrack: true, polar: true, polarInc: 90,
+const DEFAULT_SETTINGS = { theme: 'dark', grid: true, aperture: 12, snapLabels: true, snap: DEFAULT_SNAP, gizmo: true, dynInput: true, wheelInvert: false, zoomSpeed: 1, textLimit: 25000, newUnits: 4, style: 'wire', otrack: true, polar: true, polarInc: 90,
   dynFields: true, gripsAlways: false, originMark: true, axisTripod: true };
 function loadSettings() {
   let o = {}; try { o = JSON.parse(localStorage.getItem('fastdxf.settings') || '{}') || {}; } catch (e) { o = {}; }
   const st = Object.assign({}, DEFAULT_SETTINGS, o); st.snap = Object.assign({}, DEFAULT_SNAP, o.snap || {});
-  // ayar sürümü 2: yeni çizim birimi varsayılanı santimetre (eski kayıtlarda metre kalmışsa)
-  if (!(o.settingsVer >= 2)) { if (o.newUnits === undefined || o.newUnits === 6) st.newUnits = 5; st.settingsVer = 2; }
+  // ayar sürümü 3: yeni çizim birimi varsayılanı milimetre (eski kayıtlarda cm / m kalmışsa)
+  if (!(o.settingsVer >= 3)) { if (o.newUnits === undefined || o.newUnits === 5 || o.newUnits === 6) st.newUnits = 4; st.settingsVer = 3; }   // v3: varsayılan birim milimetre (CAD programlarıyla 1 birim = 1 mm)
   return st;
 }
 function saveSettings(st) { try { localStorage.setItem('fastdxf.settings', JSON.stringify(st)); } catch (e) { /* özel pencerede saklanamayabilir */ } }
@@ -950,17 +950,40 @@ class App {
         }
       },
       rect: {
-        wantsPoints: true, a: null,
-        prompt() { return this.a ? 'Karşı köşe (veya @genişlik,yükseklik)' : 'Dikdörtgen: ilk köşe'; },
-        start() { this.a = null; },
-        corners(a, b) { return [[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]]; },
-        click(p) {
-          if (!this.a) { this.a = p; return; }
-          if (app.ready() && p[0] !== this.a[0] && p[1] !== this.a[1]) { const C = this.corners(this.a, p).map(A); app.editor.create(app.newDef('LWPOLYLINE', { xs: C.map(q => q[0]), ys: C.map(q => q[1]), closed: true, elev: Z(this.a) })); }
-          this.a = null; app.done1();
+        wantsPoints: true, a: null, ang: 0,
+        prompt() { return this.a ? 'Karşı köşe — en, boy ve açı yazılabilir (Tab ile geçin) · ya da @genişlik,yükseklik' : 'Dikdörtgen: ilk köşe'; },
+        start() { this.a = null; this.ang = 0; },
+        // ilk köşe a, karşı köşe b; açı (derece) dikdörtgenin ilk kenarının yönü
+        corners(a, b, ang) {
+          const r = (ang || 0) * Math.PI / 180, ux = Math.cos(r), uy = Math.sin(r), dx = b[0] - a[0], dy = b[1] - a[1];
+          const w = dx * ux + dy * uy, h = -dx * uy + dy * ux;
+          return [[a[0], a[1]], [a[0] + w * ux, a[1] + w * uy], [a[0] + w * ux - h * uy, a[1] + w * uy + h * ux], [a[0] - h * uy, a[1] + h * ux]];
         },
-        input(s) { const p = app.parsePoint(s, this.a); if (!p) return false; this.click(p); return true; },
-        preview(ctx) { if (this.a) { const b = app.point(this.a); strokePts(ctx, this.corners(this.a, b), true); label(ctx, fmtC(Math.abs(b[0] - this.a[0])) + ' × ' + fmtC(Math.abs(b[1] - this.a[1])), b); } }
+        // dinamik giriş: [en] [boy] [açı] — yazılmayan değer imleçten; işaret imlecin bulunduğu yandan
+        dyn: {
+          fields: [{ g: 'w' }, { g: 'h' }, { g: 'ang' }],
+          frame(p, base, ang) { const r = ang * Math.PI / 180, ux = Math.cos(r), uy = Math.sin(r), dx = p[0] - base[0], dy = p[1] - base[1]; return [dx * ux + dy * uy, -dx * uy + dy * ux, ux, uy]; },
+          constrain(p, base, v) {
+            const t = app.tools.rect, ang = v[2] !== null ? v[2] : 0; t.ang = ang;
+            if (v[0] === null && v[1] === null) return v[2] === null ? null : p;
+            const [w0, h0, ux, uy] = this.frame(p, base, ang);
+            const sg = (q) => q < 0 ? -1 : 1, w = v[0] !== null ? Math.abs(v[0]) * (v[0] < 0 ? -1 : sg(w0)) : w0, h = v[1] !== null ? Math.abs(v[1]) * (v[1] < 0 ? -1 : sg(h0)) : h0;
+            return [base[0] + w * ux - h * uy, base[1] + w * uy + h * ux, base[2] !== undefined ? base[2] : (p[2] || 0)];
+          },
+          live(p, base) { const ang = app.tools.rect.ang || 0, f = this.frame(p, base, ang); return [Math.abs(f[0]), Math.abs(f[1]), ang]; }
+        },
+        click(p) {
+          if (!this.a) { this.a = p; this.ang = 0; return; }
+          const C = this.corners(this.a, p, this.ang), w = Math.hypot(C[1][0] - C[0][0], C[1][1] - C[0][1]), h = Math.hypot(C[3][0] - C[0][0], C[3][1] - C[0][1]);
+          if (app.ready() && w > 1e-9 && h > 1e-9) { const Q = C.map(A); app.editor.create(app.newDef('LWPOLYLINE', { xs: Q.map(q => q[0]), ys: Q.map(q => q[1]), closed: true, elev: Z(this.a) })); }
+          this.a = null; this.ang = 0; app.done1();
+        },
+        input(s) { const p = app.parsePoint(s, this.a); if (!p) return false; this.ang = 0; this.click(p); return true; },
+        preview(ctx) {
+          if (!this.a) return;
+          const b = app.point(this.a), C = this.corners(this.a, b, this.ang); strokePts(ctx, C, true);
+          if (!(app.dyn && app.dyn.mode())) label(ctx, fmtC(Math.hypot(C[1][0] - C[0][0], C[1][1] - C[0][1])) + ' × ' + fmtC(Math.hypot(C[3][0] - C[0][0], C[3][1] - C[0][1])), b);
+        }
       },
       polygon: {
         wantsPoints: true, c: null,
@@ -982,12 +1005,21 @@ class App {
       },
       circle: {
         wantsPoints: true, c: null,
-        prompt() { return this.c ? 'Yarıçap (tıklayın veya sayı yazın)' : 'Daire: merkez noktası'; },
+        prompt() { return this.c ? 'Yarıçap (tıklayın ya da yarıçap / çap yazın — Tab ile çapa geçin)' : 'Daire: merkez noktası'; },
+        dyn: {
+          fields: [{ g: 'r' }, { g: 'd' }],
+          constrain(p, c, v) {
+            const r = v[0] !== null ? v[0] : v[1] !== null ? v[1] / 2 : null; if (r === null) return null;
+            const dx = p[0] - c[0], dy = p[1] - c[1], L = Math.hypot(dx, dy), ux = L > 0 ? dx / L : 1, uy = L > 0 ? dy / L : 0;
+            return [c[0] + Math.abs(r) * ux, c[1] + Math.abs(r) * uy, c[2] !== undefined ? c[2] : (p[2] || 0)];
+          },
+          live(p, c) { const r = Math.hypot(p[0] - c[0], p[1] - c[1]); return [r, 2 * r]; }
+        },
         start() { this.c = null; },
         click(p) { if (!this.c) { this.c = p; return; } this.make(Math.hypot(p[0] - this.c[0], p[1] - this.c[1])); },
         make(r) { if (r > 0 && app.ready()) { const a = A(this.c); app.editor.create(app.newDef('CIRCLE', { cx: a[0], cy: a[1], cz: Z(this.c), r })); } this.c = null; app.done1(); },
         input(s) { if (this.c && /^[\d.,]+$/.test(s.trim())) { this.make(num(s)); return true; } const p = app.parsePoint(s, this.c); if (!p) return false; this.click(p); return true; },
-        preview(ctx) { if (!this.c) return; const p = app.point(this.c), r = Math.hypot(p[0] - this.c[0], p[1] - this.c[1]); strokePts(ctx, circ(this.c, r)); app.rubber(ctx, this.c, p); label(ctx, 'R ' + fmtC(r), p); }
+        preview(ctx) { if (!this.c) return; const p = app.point(this.c), r = Math.hypot(p[0] - this.c[0], p[1] - this.c[1]); strokePts(ctx, circ(this.c, r)); app.rubber(ctx, this.c, p); if (!(app.dyn && app.dyn.mode())) label(ctx, 'R ' + fmtC(r), p); }
       },
       circle3: {
         wantsPoints: true, P: [],
@@ -1763,7 +1795,7 @@ class App {
     const st = this.settings, R = this.R;
     R.setTheme(st.theme !== 'light'); $('view').style.background = R.dark ? '#1b1e23' : '#fff';
     R.textLimit = st.textLimit; this.gizmo.enabled = !!st.gizmo;
-    const nh = document.querySelector('#ddFile [data-cmd="new"] .hint'); if (nh) nh.textContent = 'Boş bir çizimle başlayın (' + (UNITS[st.newUnits] || 'santimetre') + ')';
+    const nh = document.querySelector('#ddFile [data-cmd="new"] .hint'); if (nh) nh.textContent = 'Boş bir çizimle başlayın (' + (UNITS[st.newUnits] || 'milimetre') + ')';
     if (st.style && st.style !== R.style) R.style = st.style;
     this.renderLayers(); this.vc.draw(); this.update3DUI(); this.updateButtons(); R.request();
   }
